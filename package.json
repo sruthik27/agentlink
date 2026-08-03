@@ -4,8 +4,8 @@
   "description": "Local-first coordination bus for coding agents working across repos through durable contracts.",
   "type": "module",
   "bin": {
-    "agentlink": "./dist/cli.js",
-    "agentlink-mcp": "./dist/mcp/server.js"
+    "agentlink": "dist/cli.js",
+    "agentlink-mcp": "dist/mcp/server.js"
   },
   "files": [
     "README.md",
