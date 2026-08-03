@@ -25,18 +25,21 @@ For MCP-capable harnesses, the package also exposes `agentlink-mcp` as a stdio s
 
 ## Demo
 
-A terminal demo is checked in as an asciinema v2 cast:
+![AgentLink terminal demo](demos/agentlink-demo.gif)
+
+The README animation above shows two local workspaces negotiating an API contract, recording approvals, accepting the contract, and syncing `.agentlink/CONTRACT.md` to the peer repo.
+
+The source recording is also checked in as an asciinema v2 cast:
 
 ```bash
 asciinema play demos/agentlink-demo.cast
 ```
 
-It shows two local workspaces negotiating an API contract, recording approvals, accepting the contract, and syncing `.agentlink/CONTRACT.md` to the peer repo.
-
-Regenerate it locally with:
+Regenerate both demo assets locally with:
 
 ```bash
 python3 scripts/record-demo.py
+python3 scripts/cast-to-gif.py
 ```
 
 ## MVP
