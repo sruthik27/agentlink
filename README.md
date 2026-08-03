@@ -23,6 +23,22 @@ agentlink setup --harness claude-code
 
 For MCP-capable harnesses, the package also exposes `agentlink-mcp` as a stdio server.
 
+## Demo
+
+A terminal demo is checked in as an asciinema v2 cast:
+
+```bash
+asciinema play demos/agentlink-demo.cast
+```
+
+It shows two local workspaces negotiating an API contract, recording approvals, accepting the contract, and syncing `.agentlink/CONTRACT.md` to the peer repo.
+
+Regenerate it locally with:
+
+```bash
+python3 scripts/record-demo.py
+```
+
 ## MVP
 
 - Discover active coding-agent sessions from tmux panes across common harnesses: Claude Code, Codex CLI, GitHub Copilot CLI, OpenCode, Gemini CLI, Kimi, and unknown future MCP-capable CLIs.
