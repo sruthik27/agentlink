@@ -21,7 +21,8 @@
     "build": "tsc -p tsconfig.json",
     "prepack": "npm run build",
     "test": "npm run build && node --test dist/*.test.js dist/**/*.test.js",
-    "agentlink": "npm run build --silent && node dist/cli.js"
+    "agentlink": "npm run build --silent && node dist/cli.js",
+    "postbuild": "chmod +x dist/cli.js dist/mcp/server.js"
   },
   "keywords": [
     "claude-code",
