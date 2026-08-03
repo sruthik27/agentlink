@@ -1,0 +1,4 @@
+node_modules/
+dist/
+.agentlink/conversations/*.jsonl
+.DS_Store

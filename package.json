@@ -1,0 +1,54 @@
+{
+  "name": "agentlink",
+  "version": "0.1.0",
+  "description": "Local-first coordination bus for coding agents working across repos through durable contracts.",
+  "type": "module",
+  "bin": {
+    "agentlink": "./dist/cli.js",
+    "agentlink-mcp": "./dist/mcp/server.js"
+  },
+  "files": [
+    "README.md",
+    "LICENSE",
+    "CHANGELOG.md",
+    "dist/**/*.js",
+    "dist/**/*.d.ts",
+    "!dist/**/*.test.js",
+    "!dist/**/*.test.d.ts",
+    "!dist/**/*.js.map"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "prepack": "npm run build",
+    "test": "npm run build && node --test dist/*.test.js dist/**/*.test.js",
+    "agentlink": "npm run build --silent && node dist/cli.js"
+  },
+  "keywords": [
+    "claude-code",
+    "agents",
+    "mcp",
+    "tmux",
+    "multi-agent",
+    "cross-repo"
+  ],
+  "author": "Sruthik Issac <sruthik2016@gmail.com>",
+  "license": "MIT",
+  "homepage": "https://github.com/sruthik27/agentlink#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/sruthik27/agentlink.git"
+  },
+  "bugs": {
+    "url": "https://github.com/sruthik27/agentlink/issues"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "devDependencies": {
+    "@types/node": "latest",
+    "typescript": "latest"
+  }
+}
