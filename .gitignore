@@ -1,4 +1,7 @@
 node_modules/
 dist/
-.agentlink/conversations/*.jsonl
+.agentlink/
+.hermes/
+*.tgz
+release-notes-v*.md
 .DS_Store
