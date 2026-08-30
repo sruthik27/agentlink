@@ -6,22 +6,26 @@ The product goal is not generic agent chat. The wedge is **cross-repo contract n
 
 ## Install
 
-Run without installing:
-
-```bash
-npx agentlink doctor
-npx agentlink setup --harness all
-```
-
-Install globally:
+Install once, then add AgentLink to your coding agent app as an MCP server:
 
 ```bash
 npm install -g agentlink
+npx agentlink doctor
 agentlink doctor
-agentlink setup --harness claude-code
+codex mcp add agentlink -- agentlink-mcp
+# or: claude mcp add -s user agentlink -- agentlink-mcp
+# OpenCode: add an MCP stdio server named agentlink with command agentlink-mcp in OpenCode settings
 ```
 
-For MCP-capable harnesses, the package also exposes `agentlink-mcp` as a stdio server.
+After that, use Codex/Claude Code/OpenCode normally. The agent sees AgentLink tools in its MCP tool catalog and uses them to coordinate contracts/messages without you manually operating AgentLink.
+
+You can also inspect setup help with:
+
+```bash
+npx agentlink setup --harness all
+```
+
+For MCP-capable harnesses, the package exposes `agentlink-mcp` as a stdio server.
 
 ## Demo
 
@@ -108,11 +112,13 @@ local install, stdio MCP server, harness setup, and agent-prompt instructions;
 use `--harness <stdio|claude-code|codex|copilot|opencode|gemini|all>` and `--format json` for
 machine-readable setup data. `ship-check` is a read-only launch-readiness gate
 for final QA; it verifies package metadata, bins, npm package file allowlist,
-README command/positioning coverage, and build artifacts, while explicitly
+actual `npm pack --dry-run --json` contents, npm tarball bin executability,
+an installed packed-tarball CLI smoke, README command/positioning coverage, and build artifacts, while explicitly
 preserving the boundary that publishing or public launch requires human approval.
 `launch-brief` prints the
 final human approval artifact: product thesis, verification commands, demo commands,
 launch artifacts, CEO decisions needed, and the no-publish/no-launch-without-approval boundary.
+Release notes for the launch candidate are kept in `release-notes-v0.1.0.md` and are included in the npm package so GitHub/npm announcement copy is reviewable before approval.
 `version` prints the installed package version so harness configs and smoke tests
 can confirm the expected AgentLink build is on PATH.
 `demo --peer <repo-path>` runs a deterministic local two-repo API-contract

@@ -1,5 +1,6 @@
 import { access, readFile } from 'node:fs/promises';
-import { join, relative } from 'node:path';
+import { dirname, join, relative } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { readContractState } from './contract.js';
 import { filterAgentPanes, listTmuxPanes, type TmuxPane } from './tmux.js';
 import { AGENTLINK_DIRECTORY, CONVERSATIONS_DIRECTORY, listConversations } from './store.js';
@@ -55,6 +56,10 @@ async function readPackageManifest(cwd: string): Promise<PackageManifest | undef
   }
 }
 
+function installedMcpServerPath(): string {
+  return join(dirname(fileURLToPath(import.meta.url)), 'mcp', 'server.js');
+}
+
 export async function collectDoctorReport(
   cwd = process.cwd(),
   paneLister: TmuxPaneLister = listTmuxPanes,
@@ -71,19 +76,23 @@ export async function collectDoctorReport(
 
   const manifest = await readPackageManifest(cwd);
   if (!manifest) {
-    checks.push(check('fail', 'package.json', 'missing or unreadable'));
+    checks.push(check('warn', 'package.json', 'missing or unreadable in current project'));
   } else {
     const name = typeof manifest.name === 'string' ? manifest.name : 'unnamed';
     checks.push(check('ok', 'package.json', name));
-    const scripts = manifest.scripts && typeof manifest.scripts === 'object'
-      ? Object.keys(manifest.scripts as Record<string, unknown>).sort()
-      : [];
-    const missingScripts = ['build', 'test', 'agentlink'].filter((script) => !scripts.includes(script));
-    checks.push(
-      missingScripts.length === 0
-        ? check('ok', 'npm scripts', scripts.join(', '))
-        : check('fail', 'npm scripts', `missing: ${missingScripts.join(', ')}`),
-    );
+    if (name === 'agentlink') {
+      const scripts = manifest.scripts && typeof manifest.scripts === 'object'
+        ? Object.keys(manifest.scripts as Record<string, unknown>).sort()
+        : [];
+      const missingScripts = ['build', 'test', 'agentlink'].filter((script) => !scripts.includes(script));
+      checks.push(
+        missingScripts.length === 0
+          ? check('ok', 'npm scripts', scripts.join(', '))
+          : check('fail', 'npm scripts', `missing: ${missingScripts.join(', ')}`),
+      );
+    } else {
+      checks.push(check('ok', 'consumer project', 'no AgentLink package scripts required'));
+    }
   }
 
   const workspace = join(cwd, AGENTLINK_DIRECTORY);
@@ -120,11 +129,11 @@ export async function collectDoctorReport(
     checks.push(check('warn', 'tmux agents', error instanceof Error ? error.message : String(error)));
   }
 
-  const mcpBuildPath = join(cwd, 'dist', 'mcp', 'server.js');
+  const mcpBuildPath = installedMcpServerPath();
   checks.push(
     await pathExists(mcpBuildPath)
-      ? check('ok', 'MCP build artifact', formatRelative(cwd, mcpBuildPath))
-      : check('warn', 'MCP build artifact', 'missing; run `npm run build` before using agentlink-mcp'),
+      ? check('ok', 'MCP build artifact', mcpBuildPath)
+      : check('warn', 'MCP build artifact', 'missing from installed AgentLink package; reinstall or rebuild AgentLink'),
   );
 
   return {

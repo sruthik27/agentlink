@@ -15,3 +15,4 @@ Initial public release candidate.
 - `agentlink-mcp` stdio server exposing the same local bus primitives to MCP-capable harnesses.
 - Setup guidance for stdio, Claude Code, Codex, OpenCode, GitHub Copilot CLI, and Gemini CLI workflows.
 - Doctor, ship-check, launch-brief, and deterministic two-repo demo commands for launch/readiness verification.
+- README demo GIF/cast packaging gates plus npm tarball dry-run, executable bin, installed CLI, and installed MCP stdio smoke checks in `ship-check`.

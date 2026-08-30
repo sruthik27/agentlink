@@ -22,14 +22,14 @@ test('setup guide renders deterministic local MCP and harness instructions', asy
   const guide = await collectSetupGuide(cwd, 'claude-code');
   assert.equal(guide.packageName, 'agentlink');
   assert.equal(guide.version, '0.1.0');
-  assert.equal(guide.mcpCommand, 'node');
-  assert.deepEqual(guide.mcpArgs, [join(cwd, 'dist', 'mcp', 'server.js')]);
+  assert.equal(guide.mcpCommand, 'agentlink-mcp');
+  assert.deepEqual(guide.mcpArgs, []);
   assert.deepEqual(guide.harnesses, ['claude-code']);
   assert.match(guide.agentPrompt, /Keep repo source isolated/);
 
   const markdown = renderSetupGuideMarkdown(guide);
   assert.match(markdown, /# AgentLink Setup Guide/);
-  assert.match(markdown, /claude mcp add -s local agentlink -- node "\$PWD\/dist\/mcp\/server\.js"/);
+  assert.match(markdown, /claude mcp add -s user agentlink -- agentlink-mcp/);
   assert.doesNotMatch(markdown, /### Codex CLI/);
 });
 

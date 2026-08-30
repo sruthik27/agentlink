@@ -1,5 +1,6 @@
 import { readFile } from 'node:fs/promises';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 export const SETUP_HARNESSES = ['stdio', 'claude-code', 'codex', 'copilot', 'opencode', 'gemini'] as const;
 export type SetupHarness = typeof SETUP_HARNESSES[number];
@@ -29,6 +30,30 @@ async function readPackage(cwd: string): Promise<{ name?: string; version?: stri
   }
 }
 
+async function readAgentLinkPackage(): Promise<{ name: string; version?: string }> {
+  let cursor = dirname(fileURLToPath(import.meta.url));
+  for (let i = 0; i < 5; i += 1) {
+    try {
+      const parsed = JSON.parse(await readFile(join(cursor, 'package.json'), 'utf8')) as {
+        name?: unknown;
+        version?: unknown;
+      };
+      if (parsed.name === 'agentlink') {
+        return {
+          name: 'agentlink',
+          ...(typeof parsed.version === 'string' ? { version: parsed.version } : {}),
+        };
+      }
+    } catch {
+      // Keep walking toward the installed/source AgentLink package root.
+    }
+    const next = dirname(cursor);
+    if (next === cursor) break;
+    cursor = next;
+  }
+  return { name: 'agentlink' };
+}
+
 export function parseSetupHarness(value: string): SetupHarness {
   const normalized = value.trim().toLowerCase();
   const harness = SETUP_HARNESSES.find((candidate) => candidate === normalized);
@@ -39,13 +64,14 @@ export function parseSetupHarness(value: string): SetupHarness {
 }
 
 export async function collectSetupGuide(cwd = process.cwd(), harness: SetupHarness | 'all' = 'all'): Promise<SetupGuide> {
-  const manifest = await readPackage(cwd);
+  await readPackage(cwd);
+  const manifest = await readAgentLinkPackage();
   return {
-    packageName: manifest.name ?? 'agentlink',
+    packageName: manifest.name,
     ...(manifest.version ? { version: manifest.version } : {}),
     workspacePath: cwd,
-    mcpCommand: 'node',
-    mcpArgs: [join(cwd, 'dist', 'mcp', 'server.js')],
+    mcpCommand: 'agentlink-mcp',
+    mcpArgs: [],
     harnesses: harness === 'all' ? [...SETUP_HARNESSES] : [harness],
     agentPrompt: [
       'Use AgentLink for cross-repo coordination. Keep repo source isolated; exchange compact contract updates only.',
@@ -78,10 +104,10 @@ function renderClaudeSection(): string[] {
   return [
     '### Claude Code',
     '',
-    'After `npm run build`, add the local MCP server to this project:',
+    'After installing AgentLink, add the MCP server to your agent app:',
     '',
     '```bash',
-    'claude mcp add -s local agentlink -- node "$PWD/dist/mcp/server.js"',
+    'claude mcp add -s user agentlink -- agentlink-mcp',
     '```',
   ];
 }
@@ -90,13 +116,11 @@ function renderCodexSection(): string[] {
   return [
     '### Codex CLI',
     '',
-    'Use the generic stdio MCP server config if your Codex build exposes MCP configuration; otherwise use AgentLink as the standalone control plane from shell commands:',
+    'Add AgentLink once, then use Codex normally. The agent sees AgentLink tools inside its MCP tool catalog:',
     '',
     '```bash',
-    'npm run agentlink -- context',
-    'npm run agentlink -- start --topic "<change>" --template api-change --max-rounds 6 --required-approvals 2',
-    'npm run agentlink -- read',
-    'npm run agentlink -- contract --set-section "Agreed Changes" --content "- ..."',
+    'codex mcp add agentlink -- agentlink-mcp',
+    'codex',
     '```',
   ];
 }
@@ -105,7 +129,7 @@ function renderOpenCodeSection(): string[] {
   return [
     '### OpenCode',
     '',
-    'Point OpenCode MCP settings at the generic stdio server above. Keep AgentLink as the durable bus and use tmux only for discovery/notification.',
+    'Add AgentLink to OpenCode as a stdio MCP server named `agentlink` with command `agentlink-mcp`, then use OpenCode normally. Keep tmux only for optional live-session discovery/notification.',
   ];
 }
 
@@ -142,12 +166,13 @@ export function renderSetupGuideMarkdown(guide: SetupGuide): string {
     '',
     `- Package: ${guide.packageName}${guide.version ? ` ${guide.version}` : ''}`,
     `- Workspace: ${guide.workspacePath}`,
-    '- Build: `npm install && npm run build`',
-    '- Smoke test: `node dist/mcp/server.js` with JSON-RPC initialize/list_tools, or `npm run agentlink -- doctor` for local readiness.',
+    '- Install: `npm install -g agentlink` or run with `npx agentlink ...`',
+    '- Quick check: `npx agentlink doctor`',
+    '- Smoke test: `agentlink doctor`, then add `agentlink-mcp` to your coding agent MCP config.',
     '',
     '## MCP Server',
     '',
-    `Command: \`${guide.mcpCommand} ${guide.mcpArgs.map((arg) => JSON.stringify(arg)).join(' ')}\``,
+    `Command: \`${[guide.mcpCommand, ...guide.mcpArgs.map((arg) => JSON.stringify(arg))].join(' ')}\``,
     '',
   ];
 

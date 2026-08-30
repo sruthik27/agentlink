@@ -106,17 +106,24 @@ async function readVersionAt(path: string): Promise<string | undefined> {
 }
 
 async function readPackageVersion(cwd: string): Promise<string> {
-  const cwdVersion = await readVersionAt(join(cwd, 'package.json'));
-  if (cwdVersion) return cwdVersion;
-
   let cursor = dirname(fileURLToPath(import.meta.url));
   for (let i = 0; i < 5; i += 1) {
-    const version = await readVersionAt(join(cursor, 'package.json'));
-    if (version) return version;
+    const manifestPath = join(cursor, 'package.json');
+    try {
+      const manifest = JSON.parse(await readFile(manifestPath, 'utf8')) as { name?: unknown; version?: unknown };
+      if (manifest.name === 'agentlink' && typeof manifest.version === 'string' && manifest.version.trim()) {
+        return manifest.version;
+      }
+    } catch {
+      // Keep walking toward the installed/source AgentLink package root.
+    }
     const next = dirname(cursor);
     if (next === cursor) break;
     cursor = next;
   }
+
+  const cwdVersion = await readVersionAt(join(cwd, 'package.json'));
+  if (cwdVersion) return cwdVersion;
   return 'unknown';
 }
 

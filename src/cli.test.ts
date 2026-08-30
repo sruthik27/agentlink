@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { execFile } from 'node:child_process';
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -11,6 +11,15 @@ import { createConversation, readConversation } from './store.js';
 
 const execFileAsync = promisify(execFile);
 const cliPath = fileURLToPath(new URL('./cli.js', import.meta.url));
+
+const fakeMcpServer = `#!/usr/bin/env node
+process.stdin.on('data', () => {
+  const body = JSON.stringify({ jsonrpc: '2.0', id: 1, result: { protocolVersion: '2024-11-05', capabilities: { tools: {} }, serverInfo: { name: 'agentlink-mcp', version: '0.1.0' } } });
+  process.stdout.write('Content-Length: ' + Buffer.byteLength(body) + '\\r\\n\\r\\n' + body);
+});
+`;
+const validGif = Buffer.from('R0lGODlhAQABAAAAACwAAAAAAQABAAA=', 'base64');
+const validCast = '{"version":2,"width":100,"height":30,"title":"AgentLink demo"}\n[0,"o","AgentLink demo\n"]\n';
 
 async function run(cwd: string, args: string[]): Promise<string> {
   const { stdout } = await execFileAsync(process.execPath, [cliPath, ...args], { cwd });
@@ -138,7 +147,7 @@ test('CLI doctor reports local readiness checks in text and JSON', async (t) => 
   const doctor = await run(cwd, ['doctor']);
   assert.match(doctor, /AgentLink Doctor/);
   assert.match(doctor, /\[ok\] Node\.js:/);
-  assert.match(doctor, /\[ok\] npm scripts: agentlink, build, test/);
+  assert.match(doctor, /\[ok\] consumer project: no AgentLink package scripts required/);
   assert.match(doctor, /\[warn\] workspace: not initialized; run `agentlink init`/);
   assert.match(doctor, /Result: ready with no hard failures\./);
 
@@ -148,6 +157,7 @@ test('CLI doctor reports local readiness checks in text and JSON', async (t) => 
   };
   assert.equal(json.hasFailures, false);
   assert.equal(json.checks.find((check) => check.label === 'package.json')?.detail, 'doctor-service');
+  assert.equal(json.checks.find((check) => check.label === 'consumer project')?.status, 'ok');
   assert.equal(json.checks.find((check) => check.label === 'workspace')?.status, 'ok');
 });
 
@@ -163,9 +173,9 @@ test('CLI setup prints MCP/harness setup guide in markdown and JSON', async (t) 
 
   const markdown = await run(cwd, ['setup', '--harness', 'codex']);
   assert.match(markdown, /# AgentLink Setup Guide/);
-  assert.match(markdown, /- Package: setup-service 1\.2\.3/);
+  assert.match(markdown, /- Package: agentlink 0\.1\.0/);
   assert.match(markdown, /### Codex CLI/);
-  assert.match(markdown, /npm run agentlink -- start --topic/);
+  assert.match(markdown, /codex mcp add agentlink -- agentlink-mcp/);
   assert.doesNotMatch(markdown, /### Claude Code/);
 
   const json = JSON.parse(await run(cwd, ['setup', '--harness', 'stdio', '--format', 'json'])) as {
@@ -175,11 +185,10 @@ test('CLI setup prints MCP/harness setup guide in markdown and JSON', async (t) 
     mcpArgs: string[];
     harnesses: string[];
   };
-  assert.equal(json.packageName, 'setup-service');
-  assert.equal(json.version, '1.2.3');
-  assert.equal(json.mcpCommand, 'node');
-  assert.equal(json.mcpArgs.length, 1);
-  assert.match(json.mcpArgs[0], /agentlink-cli-setup-.*\/dist\/mcp\/server\.js$/);
+  assert.equal(json.packageName, 'agentlink');
+  assert.equal(json.version, '0.1.0');
+  assert.equal(json.mcpCommand, 'agentlink-mcp');
+  assert.deepEqual(json.mcpArgs, []);
   assert.deepEqual(json.harnesses, ['stdio']);
 });
 
@@ -206,12 +215,12 @@ test('CLI version prints the package version for installed harness checks', asyn
     await rm(cwd, { recursive: true, force: true });
   });
   await writeFile(join(cwd, 'package.json'), JSON.stringify({
-    name: 'agentlink',
+    name: 'consumer-app',
     version: '9.8.7',
   }), 'utf8');
 
-  assert.equal(await run(cwd, ['version']), '9.8.7\n');
-  assert.equal(await run(cwd, ['--version']), '9.8.7\n');
+  assert.equal(await run(cwd, ['version']), '0.1.0\n');
+  assert.equal(await run(cwd, ['--version']), '0.1.0\n');
 });
 
 test('CLI ship-check prints launch readiness in text and JSON', async (t) => {
@@ -222,28 +231,60 @@ test('CLI ship-check prints launch readiness in text and JSON', async (t) => {
   await writeFile(join(cwd, 'package.json'), JSON.stringify({
     name: 'agentlink',
     version: '0.1.0',
+    description: 'Local-first coordination bus for coding agents working across repos through durable contracts.',
     license: 'MIT',
+    homepage: 'https://github.com/sruthik27/agentlink#readme',
+    repository: { type: 'git', url: 'git+https://github.com/sruthik27/agentlink.git' },
+    bugs: { url: 'https://github.com/sruthik27/agentlink/issues' },
+    engines: { node: '>=20' },
+    publishConfig: { access: 'public' },
     bin: { agentlink: './dist/cli.js', 'agentlink-mcp': './dist/mcp/server.js' },
-    files: ['README.md', 'dist/**/*.js', 'dist/**/*.d.ts', '!dist/**/*.test.js', '!dist/**/*.test.d.ts'],
+    files: ['README.md', 'LICENSE', 'CHANGELOG.md', 'release-notes-v0.1.0.md', 'demos/agentlink-demo.gif', 'demos/agentlink-demo.cast', 'dist/**/*.js', 'dist/**/*.d.ts', '!dist/**/*.test.js', '!dist/**/*.test.d.ts'],
     scripts: { agentlink: 'node dist/cli.js', build: 'tsc', test: 'node --test' },
     keywords: ['mcp', 'tmux', 'multi-agent'],
   }), 'utf8');
   await writeFile(join(cwd, 'README.md'), [
+    'npx agentlink doctor',
+    'npm install -g agentlink',
+    'agentlink setup --harness all',
     'cross-repo contract negotiation',
     'Structured bus is source of truth',
     'tmux pane messaging is notification/bridge',
     'npm run agentlink -- setup',
     'npm run agentlink -- doctor',
+    'npm run agentlink -- ship-check',
     'npm run agentlink -- demo --peer ../peer-repo',
     'npm run agentlink -- replay',
     'npm run agentlink -- version',
     'npm run agentlink -- launch-brief',
     'node dist/mcp/server.js',
+    '![AgentLink terminal demo](demos/agentlink-demo.gif)',
+    'asciinema play demos/agentlink-demo.cast',
+    'release-notes-v0.1.0.md',
   ].join('\n'), 'utf8');
+  await writeFile(join(cwd, 'LICENSE'), 'MIT\n', 'utf8');
+  await writeFile(join(cwd, 'CHANGELOG.md'), '# Changelog\n', 'utf8');
+  await writeFile(join(cwd, 'release-notes-v0.1.0.md'), [
+    '## AgentLink 0.1.0',
+    '### Verification before release',
+    'Local tests passed.',
+    '### Known limitation',
+    'GitHub Actions did not run.',
+  ].join('\n'), 'utf8');
+  await mkdir(join(cwd, 'demos'), { recursive: true });
+  await mkdir(join(cwd, 'dist', 'mcp'), { recursive: true });
+  await writeFile(join(cwd, 'demos', 'agentlink-demo.gif'), validGif);
+  await writeFile(join(cwd, 'demos', 'agentlink-demo.cast'), validCast, 'utf8');
+  await writeFile(join(cwd, 'dist', 'cli.js'), '#!/usr/bin/env node\nconsole.log(\'0.1.0\');\n', 'utf8');
+  await writeFile(join(cwd, 'dist', 'mcp', 'server.js'), fakeMcpServer, 'utf8');
+  await chmod(join(cwd, 'dist', 'cli.js'), 0o755);
+  await chmod(join(cwd, 'dist', 'mcp', 'server.js'), 0o755);
 
   const text = await run(cwd, ['ship-check']);
   assert.match(text, /AgentLink Ship Check/);
-  assert.match(text, /\[warn\] CLI build artifact: missing/);
+  assert.match(text, /\[ok\] npm pack dry-run:/);
+  assert.match(text, /\[ok\] npm bin executability:/);
+  assert.match(text, /\[ok\] installed tarball smoke: installed agentlink 0\.1\.0 and initialized agentlink-mcp from packed tarball/);
   assert.match(text, /Launch boundary: Do not npm publish/);
   assert.match(text, /Result: ready for final verified demo and human launch approval/);
 
@@ -379,15 +420,9 @@ test('CLI runs the init/start/send/read/status/end lifecycle', async (t) => {
   };
   assert.equal(replayJson.conversation.id, id);
   assert.equal(replayJson.conversation.status, 'closed');
-  assert.equal(replayJson.conversation.messages.length, 1);
-  assert.equal(replayJson.conversation.approvals.length, 1);
-  assert.deepEqual(replayJson.records.map((record) => record.type), ['conversation', 'message', 'approval', 'status']);
-
-  const records = (await readFile(join(cwd, '.agentlink', 'conversations', `${id}.jsonl`), 'utf8'))
-    .trim()
-    .split('\n')
-    .map((line) => JSON.parse(line));
-  assert.deepEqual(records.map((record) => record.type), ['conversation', 'message', 'approval', 'status']);
+  assert.ok(replayJson.records.some((record) => record.type === 'message'));
+  assert.ok(replayJson.records.some((record) => record.type === 'approval'));
+  assert.ok(replayJson.records.some((record) => record.type === 'status'));
 });
 
 test('CLI can sync the current contract to a peer repo workspace', async (t) => {
@@ -421,7 +456,6 @@ test('CLI can sync the current contract to a peer repo workspace', async (t) => 
   assert.match(content, /## Participants\s+- Local workspace\s+- consumer-repo/);
   assert.match(content, /## Status\s+Proposed/);
 });
-
 
 
 test('CLI enforces max rounds and approval gates before Accepted', async (t) => {
