@@ -15,13 +15,13 @@ test('setup guide renders deterministic local MCP and harness instructions', asy
     await rm(cwd, { recursive: true, force: true });
   });
   await writeFile(join(cwd, 'package.json'), JSON.stringify({
-    name: 'agentlink',
-    version: '0.1.0',
+    name: '@sruthik/agentlink',
+    version: '0.1.1',
   }), 'utf8');
 
   const guide = await collectSetupGuide(cwd, 'claude-code');
-  assert.equal(guide.packageName, 'agentlink');
-  assert.equal(guide.version, '0.1.0');
+  assert.equal(guide.packageName, '@sruthik/agentlink');
+  assert.equal(guide.version, '0.1.1');
   assert.equal(guide.mcpCommand, 'agentlink-mcp');
   assert.deepEqual(guide.mcpArgs, []);
   assert.deepEqual(guide.harnesses, ['claude-code']);

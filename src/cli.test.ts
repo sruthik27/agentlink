@@ -14,7 +14,7 @@ const cliPath = fileURLToPath(new URL('./cli.js', import.meta.url));
 
 const fakeMcpServer = `#!/usr/bin/env node
 process.stdin.on('data', () => {
-  const body = JSON.stringify({ jsonrpc: '2.0', id: 1, result: { protocolVersion: '2024-11-05', capabilities: { tools: {} }, serverInfo: { name: 'agentlink-mcp', version: '0.1.0' } } });
+  const body = JSON.stringify({ jsonrpc: '2.0', id: 1, result: { protocolVersion: '2024-11-05', capabilities: { tools: {} }, serverInfo: { name: 'agentlink-mcp', version: '0.1.1' } } });
   process.stdout.write('Content-Length: ' + Buffer.byteLength(body) + '\\r\\n\\r\\n' + body);
 });
 `;
@@ -173,7 +173,7 @@ test('CLI setup prints MCP/harness setup guide in markdown and JSON', async (t) 
 
   const markdown = await run(cwd, ['setup', '--harness', 'codex']);
   assert.match(markdown, /# AgentLink Setup Guide/);
-  assert.match(markdown, /- Package: agentlink 0\.1\.0/);
+  assert.match(markdown, /- Package: @sruthik\/agentlink 0\.1\.1/);
   assert.match(markdown, /### Codex CLI/);
   assert.match(markdown, /codex mcp add agentlink -- agentlink-mcp/);
   assert.doesNotMatch(markdown, /### Claude Code/);
@@ -185,8 +185,8 @@ test('CLI setup prints MCP/harness setup guide in markdown and JSON', async (t) 
     mcpArgs: string[];
     harnesses: string[];
   };
-  assert.equal(json.packageName, 'agentlink');
-  assert.equal(json.version, '0.1.0');
+  assert.equal(json.packageName, '@sruthik/agentlink');
+  assert.equal(json.version, '0.1.1');
   assert.equal(json.mcpCommand, 'agentlink-mcp');
   assert.deepEqual(json.mcpArgs, []);
   assert.deepEqual(json.harnesses, ['stdio']);
@@ -219,8 +219,8 @@ test('CLI version prints the package version for installed harness checks', asyn
     version: '9.8.7',
   }), 'utf8');
 
-  assert.equal(await run(cwd, ['version']), '0.1.0\n');
-  assert.equal(await run(cwd, ['--version']), '0.1.0\n');
+  assert.equal(await run(cwd, ['version']), '0.1.1\n');
+  assert.equal(await run(cwd, ['--version']), '0.1.1\n');
 });
 
 test('CLI ship-check prints launch readiness in text and JSON', async (t) => {
@@ -229,8 +229,8 @@ test('CLI ship-check prints launch readiness in text and JSON', async (t) => {
     await rm(cwd, { recursive: true, force: true });
   });
   await writeFile(join(cwd, 'package.json'), JSON.stringify({
-    name: 'agentlink',
-    version: '0.1.0',
+    name: '@sruthik/agentlink',
+    version: '0.1.1',
     description: 'Local-first coordination bus for coding agents working across repos through durable contracts.',
     license: 'MIT',
     homepage: 'https://github.com/sruthik27/agentlink#readme',
@@ -239,13 +239,13 @@ test('CLI ship-check prints launch readiness in text and JSON', async (t) => {
     engines: { node: '>=20' },
     publishConfig: { access: 'public' },
     bin: { agentlink: './dist/cli.js', 'agentlink-mcp': './dist/mcp/server.js' },
-    files: ['README.md', 'LICENSE', 'CHANGELOG.md', 'release-notes-v0.1.0.md', 'demos/agentlink-demo.gif', 'demos/agentlink-demo.cast', 'dist/**/*.js', 'dist/**/*.d.ts', '!dist/**/*.test.js', '!dist/**/*.test.d.ts'],
+    files: ['README.md', 'LICENSE', 'CHANGELOG.md', 'release-notes-v0.1.1.md', 'demos/agentlink-demo.gif', 'demos/agentlink-demo.cast', 'dist/**/*.js', 'dist/**/*.d.ts', '!dist/**/*.test.js', '!dist/**/*.test.d.ts'],
     scripts: { agentlink: 'node dist/cli.js', build: 'tsc', test: 'node --test' },
     keywords: ['mcp', 'tmux', 'multi-agent'],
   }), 'utf8');
   await writeFile(join(cwd, 'README.md'), [
-    'npx agentlink doctor',
-    'npm install -g agentlink',
+    'npx @sruthik/agentlink doctor',
+    'npm install -g @sruthik/agentlink',
     'agentlink setup --harness all',
     'cross-repo contract negotiation',
     'Structured bus is source of truth',
@@ -260,12 +260,12 @@ test('CLI ship-check prints launch readiness in text and JSON', async (t) => {
     'node dist/mcp/server.js',
     '![AgentLink terminal demo](demos/agentlink-demo.gif)',
     'asciinema play demos/agentlink-demo.cast',
-    'release-notes-v0.1.0.md',
+    'release-notes-v0.1.1.md',
   ].join('\n'), 'utf8');
   await writeFile(join(cwd, 'LICENSE'), 'MIT\n', 'utf8');
   await writeFile(join(cwd, 'CHANGELOG.md'), '# Changelog\n', 'utf8');
-  await writeFile(join(cwd, 'release-notes-v0.1.0.md'), [
-    '## AgentLink 0.1.0',
+  await writeFile(join(cwd, 'release-notes-v0.1.1.md'), [
+    '## AgentLink 0.1.1',
     '### Verification before release',
     'Local tests passed.',
     '### Known limitation',
@@ -275,7 +275,7 @@ test('CLI ship-check prints launch readiness in text and JSON', async (t) => {
   await mkdir(join(cwd, 'dist', 'mcp'), { recursive: true });
   await writeFile(join(cwd, 'demos', 'agentlink-demo.gif'), validGif);
   await writeFile(join(cwd, 'demos', 'agentlink-demo.cast'), validCast, 'utf8');
-  await writeFile(join(cwd, 'dist', 'cli.js'), '#!/usr/bin/env node\nconsole.log(\'0.1.0\');\n', 'utf8');
+  await writeFile(join(cwd, 'dist', 'cli.js'), '#!/usr/bin/env node\nconsole.log(\'0.1.1\');\n', 'utf8');
   await writeFile(join(cwd, 'dist', 'mcp', 'server.js'), fakeMcpServer, 'utf8');
   await chmod(join(cwd, 'dist', 'cli.js'), 0o755);
   await chmod(join(cwd, 'dist', 'mcp', 'server.js'), 0o755);
@@ -284,7 +284,7 @@ test('CLI ship-check prints launch readiness in text and JSON', async (t) => {
   assert.match(text, /AgentLink Ship Check/);
   assert.match(text, /\[ok\] npm pack dry-run:/);
   assert.match(text, /\[ok\] npm bin executability:/);
-  assert.match(text, /\[ok\] installed tarball smoke: installed agentlink 0\.1\.0 and initialized agentlink-mcp from packed tarball/);
+  assert.match(text, /\[ok\] installed tarball smoke: installed agentlink 0\.1\.1 and initialized agentlink-mcp from packed tarball/);
   assert.match(text, /Launch boundary: Do not npm publish/);
   assert.match(text, /Result: ready for final verified demo and human launch approval/);
 
@@ -293,7 +293,7 @@ test('CLI ship-check prints launch readiness in text and JSON', async (t) => {
     launchBoundary: string;
     hasFailures: boolean;
   };
-  assert.equal(json.packageName, 'agentlink');
+  assert.equal(json.packageName, '@sruthik/agentlink');
   assert.equal(json.hasFailures, false);
   assert.match(json.launchBoundary, /explicit Sruthik approval/);
 });
@@ -304,8 +304,8 @@ test('CLI launch-brief prints final approval brief in markdown and JSON', async 
     await rm(cwd, { recursive: true, force: true });
   });
   await writeFile(join(cwd, 'package.json'), JSON.stringify({
-    name: 'agentlink',
-    version: '0.1.0',
+    name: '@sruthik/agentlink',
+    version: '0.1.1',
   }), 'utf8');
 
   const markdown = await run(cwd, ['launch-brief']);

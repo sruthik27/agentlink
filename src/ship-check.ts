@@ -102,7 +102,7 @@ function releaseNotesFileName(version: string | undefined): string {
   const normalized = version?.trim();
   return normalized && /^\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?$/.test(normalized)
     ? `release-notes-v${normalized}.md`
-    : 'release-notes-v0.1.0.md';
+    : 'release-notes-v0.1.1.md';
 }
 
 function nodeEngineSupportsLaunchBaseline(value: unknown): boolean {
@@ -138,20 +138,26 @@ async function validateDemoMedia(cwd: string): Promise<string[]> {
 }
 
 async function collectNpmPackDryRunFiles(cwd: string): Promise<PackedFile[]> {
-  const { stdout } = await execFileAsync('npm', ['--silent', 'pack', '--dry-run', '--json', '--ignore-scripts'], {
-    cwd,
-    timeout: 120_000,
-    maxBuffer: 5 * 1024 * 1024,
-  });
-  const parsed = JSON.parse(stdout) as NpmPackDryRunResult[];
-  const first = parsed[0];
-  return Array.isArray(first?.files)
-    ? first.files
-      .flatMap((entry) => (typeof entry.path === 'string'
-        ? [{ path: entry.path, ...(typeof entry.mode === 'number' ? { mode: entry.mode } : {}) }]
-        : []))
-      .sort((left, right) => left.path.localeCompare(right.path))
-    : [];
+  const tempRoot = await mkdtemp(join(tmpdir(), 'agentlink-pack-inspect-'));
+  try {
+    const { stdout } = await execFileAsync('npm', ['--silent', 'pack', '--dry-run', '--json', '--ignore-scripts'], {
+      cwd,
+      env: { ...process.env, npm_config_cache: join(tempRoot, 'npm-cache') },
+      timeout: 120_000,
+      maxBuffer: 5 * 1024 * 1024,
+    });
+    const parsed = JSON.parse(stdout) as NpmPackDryRunResult[];
+    const first = parsed[0];
+    return Array.isArray(first?.files)
+      ? first.files
+        .flatMap((entry) => (typeof entry.path === 'string'
+          ? [{ path: entry.path, ...(typeof entry.mode === 'number' ? { mode: entry.mode } : {}) }]
+          : []))
+        .sort((left, right) => left.path.localeCompare(right.path))
+      : [];
+  } finally {
+    await rm(tempRoot, { recursive: true, force: true });
+  }
 }
 
 async function gitIgnoresReleaseNotes(cwd: string, releaseNotesPath: string): Promise<boolean | undefined> {
@@ -177,10 +183,12 @@ async function runInstalledTarballSmoke(cwd: string, expectedVersion: string | u
   try {
     const packDir = join(tempRoot, 'pack');
     const prefix = join(tempRoot, 'prefix');
+    const npmEnvironment = { ...process.env, npm_config_cache: join(tempRoot, 'npm-cache') };
     await mkdir(packDir, { recursive: true });
     await mkdir(prefix, { recursive: true });
     const { stdout: packStdout } = await execFileAsync('npm', ['--silent', 'pack', '--json', '--pack-destination', packDir, '--ignore-scripts'], {
       cwd,
+      env: npmEnvironment,
       timeout: 120_000,
       maxBuffer: 5 * 1024 * 1024,
     });
@@ -191,6 +199,7 @@ async function runInstalledTarballSmoke(cwd: string, expectedVersion: string | u
 
     await execFileAsync('npm', ['install', '--global', '--prefix', prefix, tarballPath], {
       cwd,
+      env: npmEnvironment,
       timeout: 120_000,
       maxBuffer: 5 * 1024 * 1024,
     });
@@ -220,7 +229,7 @@ async function runInstalledMcpInitializeSmoke(binPath: string, cwd: string, expe
     params: {
       protocolVersion: '2024-11-05',
       capabilities: {},
-      clientInfo: { name: 'agentlink-ship-check', version: '0.1.0' },
+      clientInfo: { name: 'agentlink-ship-check', version: '0.1.1' },
     },
   }), 'utf8');
   const request = Buffer.concat([Buffer.from(`Content-Length: ${body.length}\r\n\r\n`, 'utf8'), body]);
@@ -288,14 +297,16 @@ async function runInstalledMcpInitializeSmoke(binPath: string, cwd: string, expe
 export async function collectShipCheckReport(cwd = process.cwd()): Promise<ShipCheckReport> {
   const checks: ShipCheckItem[] = [];
   const manifest = await readPackageManifest(cwd);
-  const packageName = typeof manifest?.name === 'string' ? manifest.name : 'agentlink';
+  const packageName = typeof manifest?.name === 'string' ? manifest.name : '@sruthik/agentlink';
   const version = typeof manifest?.version === 'string' ? manifest.version : undefined;
   const releaseNotesPath = releaseNotesFileName(version);
 
   if (!manifest) {
     checks.push(item('fail', 'package manifest', 'missing or unreadable package.json'));
   } else {
-    checks.push(item('ok', 'package manifest', `${packageName}${version ? ` ${version}` : ''}`));
+    checks.push(packageName === '@sruthik/agentlink'
+      ? item('ok', 'package manifest', `${packageName}${version ? ` ${version}` : ''}`)
+      : item('fail', 'package manifest', `expected @sruthik/agentlink, found ${packageName}`));
     const scripts = objectKeys(manifest.scripts);
     const missingScripts = ['agentlink', 'build', 'test'].filter((script) => !scripts.includes(script));
     checks.push(missingScripts.length === 0
@@ -385,8 +396,8 @@ export async function collectShipCheckReport(cwd = process.cwd()): Promise<ShipC
       : item('fail', 'README command coverage', `missing command docs: ${missingCommands.join(', ')}`));
 
     const missingInstallUx = includesAll(readme, [
-      'npx agentlink doctor',
-      'npm install -g agentlink',
+      'npx @sruthik/agentlink doctor',
+      'npm install -g @sruthik/agentlink',
       'agentlink setup --harness',
     ]);
     checks.push(missingInstallUx.length === 0
@@ -415,7 +426,7 @@ export async function collectShipCheckReport(cwd = process.cwd()): Promise<ShipC
     const readmeReferencesReleaseNotes = readme.includes(releaseNotesPath);
     const releaseNotesReady = Boolean(
       releaseNotes
-      && releaseNotes.includes(`AgentLink ${version ?? '0.1.0'}`)
+      && releaseNotes.includes(`AgentLink ${version ?? '0.1.1'}`)
       && releaseNotes.includes('Verification before release')
       && releaseNotes.includes('Known limitation')
     );

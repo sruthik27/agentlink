@@ -29,7 +29,7 @@ test('doctor reports a ready workspace and active agent panes without hard failu
   });
 
   await writeFile(join(cwd, 'package.json'), JSON.stringify({
-    name: 'agentlink',
+    name: '@sruthik/agentlink',
     scripts: { agentlink: 'node dist/cli.js', build: 'tsc', test: 'node --test' },
   }), 'utf8');
   await ensureWorkspace(cwd);
@@ -64,7 +64,7 @@ test('doctor distinguishes hard failures from non-blocking local warnings', asyn
   });
 
   await writeFile(join(cwd, 'package.json'), JSON.stringify({
-    name: 'agentlink',
+    name: '@sruthik/agentlink',
     scripts: { test: 'node --test' },
   }), 'utf8');
 

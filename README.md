@@ -9,8 +9,8 @@ The product goal is not generic agent chat. The wedge is **cross-repo contract n
 Install once, then add AgentLink to your coding agent app as an MCP server:
 
 ```bash
-npm install -g agentlink
-npx agentlink doctor
+npm install -g @sruthik/agentlink
+npx @sruthik/agentlink doctor
 agentlink doctor
 codex mcp add agentlink -- agentlink-mcp
 # or: claude mcp add -s user agentlink -- agentlink-mcp
@@ -22,7 +22,7 @@ After that, use Codex/Claude Code/OpenCode normally. The agent sees AgentLink to
 You can also inspect setup help with:
 
 ```bash
-npx agentlink setup --harness all
+npx @sruthik/agentlink setup --harness all
 ```
 
 For MCP-capable harnesses, the package exposes `agentlink-mcp` as a stdio server.
@@ -118,7 +118,7 @@ preserving the boundary that publishing or public launch requires human approval
 `launch-brief` prints the
 final human approval artifact: product thesis, verification commands, demo commands,
 launch artifacts, CEO decisions needed, and the no-publish/no-launch-without-approval boundary.
-Release notes for the launch candidate are kept in `release-notes-v0.1.0.md` and are included in the npm package so GitHub/npm announcement copy is reviewable before approval.
+Release notes for the launch candidate are kept in `release-notes-v0.1.1.md` and are included in the npm package so GitHub/npm announcement copy is reviewable before approval.
 `version` prints the installed package version so harness configs and smoke tests
 can confirm the expected AgentLink build is on PATH.
 `demo --peer <repo-path>` runs a deterministic local two-repo API-contract

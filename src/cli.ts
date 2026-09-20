@@ -111,7 +111,7 @@ async function readPackageVersion(cwd: string): Promise<string> {
     const manifestPath = join(cursor, 'package.json');
     try {
       const manifest = JSON.parse(await readFile(manifestPath, 'utf8')) as { name?: unknown; version?: unknown };
-      if (manifest.name === 'agentlink' && typeof manifest.version === 'string' && manifest.version.trim()) {
+      if (manifest.name === '@sruthik/agentlink' && typeof manifest.version === 'string' && manifest.version.trim()) {
         return manifest.version;
       }
     } catch {

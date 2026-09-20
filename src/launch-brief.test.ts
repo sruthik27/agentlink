@@ -12,13 +12,13 @@ test('launch brief renders approval boundary, verification commands, and artifac
   });
 
   await writeFile(join(cwd, 'package.json'), JSON.stringify({
-    name: 'agentlink',
-    version: '0.1.0',
+    name: '@sruthik/agentlink',
+    version: '0.1.1',
   }), 'utf8');
 
   const brief = await collectLaunchBrief(cwd);
-  assert.equal(brief.packageName, 'agentlink');
-  assert.equal(brief.version, '0.1.0');
+  assert.equal(brief.packageName, '@sruthik/agentlink');
+  assert.equal(brief.version, '0.1.1');
   assert.equal(brief.approvalRequired, true);
   assert.match(brief.productThesis, /cross-repo contract negotiation/);
   assert.ok(brief.verificationCommands.includes('npm test'));
@@ -27,7 +27,7 @@ test('launch brief renders approval boundary, verification commands, and artifac
   assert.ok(brief.launchArtifacts.includes('agentlink ship-check launch-readiness gate'));
   assert.ok(brief.launchArtifacts.includes('npm tarball dry-run/install smoke with agentlink and agentlink-mcp bins'));
   assert.ok(brief.launchArtifacts.includes('README demo GIF plus asciinema cast source'));
-  assert.ok(brief.launchArtifacts.includes('release-notes-v0.1.0.md launch notes included in README and npm tarball'));
+  assert.ok(brief.launchArtifacts.includes('release-notes-v0.1.1.md launch notes included in README and npm tarball'));
   assert.match(brief.demoCommands[0], /node .*dist\/cli\.js demo --peer/);
   assert.doesNotMatch(brief.demoCommands[0], /\/absolute\/path\/to\/agentlink/);
   assert.match(brief.launchBoundary, /without explicit Sruthik approval/);
@@ -48,11 +48,11 @@ test('launch brief derives release notes artifact from package version', async (
   });
 
   await writeFile(join(cwd, 'package.json'), JSON.stringify({
-    name: 'agentlink',
+    name: '@sruthik/agentlink',
     version: '0.2.0',
   }), 'utf8');
 
   const brief = await collectLaunchBrief(cwd);
   assert.ok(brief.launchArtifacts.includes('release-notes-v0.2.0.md launch notes included in README and npm tarball'));
-  assert.ok(!brief.launchArtifacts.includes('release-notes-v0.1.0.md launch notes included in README and npm tarball'));
+  assert.ok(!brief.launchArtifacts.includes('release-notes-v0.1.1.md launch notes included in README and npm tarball'));
 });

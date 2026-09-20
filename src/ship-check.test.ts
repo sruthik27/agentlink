@@ -9,7 +9,7 @@ import { collectShipCheckReport, renderShipCheckReport } from './ship-check.js';
 
 const execFileAsync = promisify(execFile);
 
-function fakeMcpServer(version = '0.1.0'): string {
+function fakeMcpServer(version = '0.1.1'): string {
   return `#!/usr/bin/env node
 process.stdin.on('data', () => {
   const body = JSON.stringify({ jsonrpc: '2.0', id: 1, result: { protocolVersion: '2024-11-05', capabilities: { tools: {} }, serverInfo: { name: 'agentlink-mcp', version: '${version}' } } });
@@ -28,8 +28,8 @@ test('ship check reports package, docs, bins, and build readiness', async (t) =>
   });
 
   await writeFile(join(cwd, 'package.json'), JSON.stringify({
-    name: 'agentlink',
-    version: '0.1.0',
+    name: '@sruthik/agentlink',
+    version: '0.1.1',
     description: 'Local-first coordination bus for coding agents working across repos through durable contracts.',
     license: 'MIT',
     homepage: 'https://github.com/sruthik27/agentlink#readme',
@@ -45,7 +45,7 @@ test('ship check reports package, docs, bins, and build readiness', async (t) =>
       'README.md',
       'LICENSE',
       'CHANGELOG.md',
-      'release-notes-v0.1.0.md',
+      'release-notes-v0.1.1.md',
       'demos/agentlink-demo.gif',
       'demos/agentlink-demo.cast',
       'dist/**/*.js',
@@ -63,8 +63,8 @@ test('ship check reports package, docs, bins, and build readiness', async (t) =>
   }), 'utf8');
   await writeFile(join(cwd, 'README.md'), [
     '# AgentLink',
-    'npx agentlink doctor',
-    'npm install -g agentlink',
+    'npx @sruthik/agentlink doctor',
+    'npm install -g @sruthik/agentlink',
     'agentlink setup --harness all',
     'cross-repo contract negotiation',
     'Structured bus is source of truth',
@@ -79,12 +79,12 @@ test('ship check reports package, docs, bins, and build readiness', async (t) =>
     'node dist/mcp/server.js',
     '![AgentLink terminal demo](demos/agentlink-demo.gif)',
     'asciinema play demos/agentlink-demo.cast',
-    'release-notes-v0.1.0.md',
+    'release-notes-v0.1.1.md',
   ].join('\n'), 'utf8');
   await writeFile(join(cwd, 'LICENSE'), 'MIT\n', 'utf8');
   await writeFile(join(cwd, 'CHANGELOG.md'), '# Changelog\n', 'utf8');
-  await writeFile(join(cwd, 'release-notes-v0.1.0.md'), [
-    '## AgentLink 0.1.0',
+  await writeFile(join(cwd, 'release-notes-v0.1.1.md'), [
+    '## AgentLink 0.1.1',
     '### Verification before release',
     'Local tests passed.',
     '### Known limitation',
@@ -92,7 +92,7 @@ test('ship check reports package, docs, bins, and build readiness', async (t) =>
   ].join('\n'), 'utf8');
   await mkdir(join(cwd, 'dist', 'mcp'), { recursive: true });
   await mkdir(join(cwd, 'demos'), { recursive: true });
-  await writeFile(join(cwd, 'dist', 'cli.js'), '#!/usr/bin/env node\nconsole.log(\'0.1.0\');\n', 'utf8');
+  await writeFile(join(cwd, 'dist', 'cli.js'), '#!/usr/bin/env node\nconsole.log(\'0.1.1\');\n', 'utf8');
   await writeFile(join(cwd, 'dist', 'mcp', 'server.js'), fakeMcpServer(), 'utf8');
   await chmod(join(cwd, 'dist', 'cli.js'), 0o755);
   await chmod(join(cwd, 'dist', 'mcp', 'server.js'), 0o755);
@@ -101,8 +101,8 @@ test('ship check reports package, docs, bins, and build readiness', async (t) =>
 
   const report = await collectShipCheckReport(cwd);
   assert.equal(await readFile(join(cwd, 'prepack-ran'), 'utf8').then(() => 'ran').catch(() => 'not-ran'), 'not-ran');
-  assert.equal(report.packageName, 'agentlink');
-  assert.equal(report.version, '0.1.0');
+  assert.equal(report.packageName, '@sruthik/agentlink');
+  assert.equal(report.version, '0.1.1');
   assert.equal(report.hasFailures, false);
   assert.match(report.launchBoundary, /without explicit Sruthik approval/);
   assert.deepEqual(report.checks.map((check) => check.status), [
@@ -115,7 +115,7 @@ test('ship check reports package, docs, bins, and build readiness', async (t) =>
   assert.match(rendered, /\[ok\] package files allowlist:/);
   assert.match(rendered, /\[ok\] npm bin executability:/);
   assert.match(rendered, /\[ok\] release notes artifact:/);
-  assert.match(rendered, /\[ok\] installed tarball smoke: installed agentlink 0\.1\.0 and initialized agentlink-mcp from packed tarball/);
+  assert.match(rendered, /\[ok\] installed tarball smoke: installed agentlink 0\.1\.1 and initialized agentlink-mcp from packed tarball/);
   assert.match(rendered, /Result: ready for final verified demo and human launch approval/);
 });
 
@@ -126,8 +126,8 @@ test('ship check fails npm tarball bins that are not executable', async (t) => {
   });
 
   await writeFile(join(cwd, 'package.json'), JSON.stringify({
-    name: 'agentlink',
-    version: '0.1.0',
+    name: '@sruthik/agentlink',
+    version: '0.1.1',
     description: 'Local-first coordination bus for coding agents working across repos through durable contracts.',
     license: 'MIT',
     homepage: 'https://github.com/sruthik27/agentlink#readme',
@@ -136,14 +136,14 @@ test('ship check fails npm tarball bins that are not executable', async (t) => {
     engines: { node: '>=20' },
     publishConfig: { access: 'public' },
     bin: { agentlink: './dist/cli.js', 'agentlink-mcp': './dist/mcp/server.js' },
-    files: ['README.md', 'LICENSE', 'CHANGELOG.md', 'release-notes-v0.1.0.md', 'demos/agentlink-demo.gif', 'demos/agentlink-demo.cast', 'dist/**/*.js', 'dist/**/*.d.ts'],
+    files: ['README.md', 'LICENSE', 'CHANGELOG.md', 'release-notes-v0.1.1.md', 'demos/agentlink-demo.gif', 'demos/agentlink-demo.cast', 'dist/**/*.js', 'dist/**/*.d.ts'],
     scripts: { agentlink: 'node dist/cli.js', build: 'tsc -p tsconfig.json', test: 'node --test' },
     keywords: ['mcp', 'tmux', 'multi-agent'],
   }), 'utf8');
   await writeFile(join(cwd, 'README.md'), [
     '# AgentLink',
-    'npx agentlink doctor',
-    'npm install -g agentlink',
+    'npx @sruthik/agentlink doctor',
+    'npm install -g @sruthik/agentlink',
     'agentlink setup --harness all',
     'cross-repo contract negotiation',
     'Structured bus is source of truth',
@@ -158,12 +158,12 @@ test('ship check fails npm tarball bins that are not executable', async (t) => {
     'node dist/mcp/server.js',
     '![AgentLink terminal demo](demos/agentlink-demo.gif)',
     'asciinema play demos/agentlink-demo.cast',
-    'release-notes-v0.1.0.md',
+    'release-notes-v0.1.1.md',
   ].join('\n'), 'utf8');
   await writeFile(join(cwd, 'LICENSE'), 'MIT\n', 'utf8');
   await writeFile(join(cwd, 'CHANGELOG.md'), '# Changelog\n', 'utf8');
-  await writeFile(join(cwd, 'release-notes-v0.1.0.md'), [
-    '## AgentLink 0.1.0',
+  await writeFile(join(cwd, 'release-notes-v0.1.1.md'), [
+    '## AgentLink 0.1.1',
     '### Verification before release',
     'Local tests passed.',
     '### Known limitation',
@@ -192,7 +192,7 @@ test('ship check fails missing launch-critical docs and package bins', async (t)
   });
 
   await writeFile(join(cwd, 'package.json'), JSON.stringify({
-    name: 'agentlink',
+    name: '@sruthik/agentlink',
     scripts: { build: 'tsc' },
     bin: { agentlink: './dist/cli.js' },
   }), 'utf8');
@@ -211,6 +211,23 @@ test('ship check fails missing launch-critical docs and package bins', async (t)
   assert.match(renderShipCheckReport(report), /Result: not ready; fix failed checks before launch approval/);
 });
 
+test('ship check rejects the retired unscoped npm package name', async (t) => {
+  const cwd = await mkdtemp(join(tmpdir(), 'agentlink-ship-check-package-name-'));
+  t.after(async () => {
+    await rm(cwd, { recursive: true, force: true });
+  });
+
+  await writeFile(join(cwd, 'package.json'), JSON.stringify({
+    name: 'agentlink',
+    version: '0.1.1',
+  }), 'utf8');
+
+  const report = await collectShipCheckReport(cwd);
+  const manifest = report.checks.find((check) => check.label === 'package manifest');
+  assert.equal(manifest?.status, 'fail');
+  assert.equal(manifest?.detail, 'expected @sruthik/agentlink, found agentlink');
+});
+
 test('ship check rejects package allowlists that include local source or AgentLink state', async (t) => {
   const cwd = await mkdtemp(join(tmpdir(), 'agentlink-ship-check-dirty-files-'));
   t.after(async () => {
@@ -218,8 +235,8 @@ test('ship check rejects package allowlists that include local source or AgentLi
   });
 
   await writeFile(join(cwd, 'package.json'), JSON.stringify({
-    name: 'agentlink',
-    version: '0.1.0',
+    name: '@sruthik/agentlink',
+    version: '0.1.1',
     license: 'MIT',
     bin: {
       agentlink: './dist/cli.js',
@@ -247,7 +264,7 @@ test('ship check derives the required release notes artifact from package versio
   });
 
   await writeFile(join(cwd, 'package.json'), JSON.stringify({
-    name: 'agentlink',
+    name: '@sruthik/agentlink',
     version: '0.2.0',
     license: 'MIT',
     bin: { agentlink: './dist/cli.js', 'agentlink-mcp': './dist/mcp/server.js' },
@@ -257,8 +274,8 @@ test('ship check derives the required release notes artifact from package versio
   }), 'utf8');
   await writeFile(join(cwd, 'README.md'), [
     '# AgentLink',
-    'npx agentlink doctor',
-    'npm install -g agentlink',
+    'npx @sruthik/agentlink doctor',
+    'npm install -g @sruthik/agentlink',
     'agentlink setup --harness all',
     'cross-repo contract negotiation',
     'Structured bus is source of truth',
@@ -302,8 +319,8 @@ test('ship check fails corrupt demo media', async (t) => {
   });
 
   await writeFile(join(cwd, 'package.json'), JSON.stringify({
-    name: 'agentlink',
-    version: '0.1.0',
+    name: '@sruthik/agentlink',
+    version: '0.1.1',
     description: 'Local-first coordination bus for coding agents working across repos through durable contracts.',
     license: 'MIT',
     homepage: 'https://github.com/sruthik27/agentlink#readme',
@@ -312,14 +329,14 @@ test('ship check fails corrupt demo media', async (t) => {
     engines: { node: '>=20' },
     publishConfig: { access: 'public' },
     bin: { agentlink: './dist/cli.js', 'agentlink-mcp': './dist/mcp/server.js' },
-    files: ['README.md', 'LICENSE', 'CHANGELOG.md', 'release-notes-v0.1.0.md', 'demos/agentlink-demo.gif', 'demos/agentlink-demo.cast', 'dist/**/*.js', 'dist/**/*.d.ts'],
+    files: ['README.md', 'LICENSE', 'CHANGELOG.md', 'release-notes-v0.1.1.md', 'demos/agentlink-demo.gif', 'demos/agentlink-demo.cast', 'dist/**/*.js', 'dist/**/*.d.ts'],
     scripts: { agentlink: 'node dist/cli.js', build: 'tsc -p tsconfig.json', test: 'node --test' },
     keywords: ['mcp', 'tmux', 'multi-agent'],
   }), 'utf8');
   await writeFile(join(cwd, 'README.md'), [
     '# AgentLink',
-    'npx agentlink doctor',
-    'npm install -g agentlink',
+    'npx @sruthik/agentlink doctor',
+    'npm install -g @sruthik/agentlink',
     'agentlink setup --harness all',
     'cross-repo contract negotiation',
     'Structured bus is source of truth',
@@ -334,12 +351,12 @@ test('ship check fails corrupt demo media', async (t) => {
     'node dist/mcp/server.js',
     '![AgentLink terminal demo](demos/agentlink-demo.gif)',
     'asciinema play demos/agentlink-demo.cast',
-    'release-notes-v0.1.0.md',
+    'release-notes-v0.1.1.md',
   ].join('\n'), 'utf8');
   await writeFile(join(cwd, 'LICENSE'), 'MIT\n', 'utf8');
   await writeFile(join(cwd, 'CHANGELOG.md'), '# Changelog\n', 'utf8');
-  await writeFile(join(cwd, 'release-notes-v0.1.0.md'), [
-    '## AgentLink 0.1.0',
+  await writeFile(join(cwd, 'release-notes-v0.1.1.md'), [
+    '## AgentLink 0.1.1',
     '### Verification before release',
     'Local tests passed.',
     '### Known limitation',
@@ -347,7 +364,7 @@ test('ship check fails corrupt demo media', async (t) => {
   ].join('\n'), 'utf8');
   await mkdir(join(cwd, 'dist', 'mcp'), { recursive: true });
   await mkdir(join(cwd, 'demos'), { recursive: true });
-  await writeFile(join(cwd, 'dist', 'cli.js'), '#!/usr/bin/env node\nconsole.log(\'0.1.0\');\n', 'utf8');
+  await writeFile(join(cwd, 'dist', 'cli.js'), '#!/usr/bin/env node\nconsole.log(\'0.1.1\');\n', 'utf8');
   await writeFile(join(cwd, 'dist', 'mcp', 'server.js'), fakeMcpServer(), 'utf8');
   await chmod(join(cwd, 'dist', 'cli.js'), 0o755);
   await chmod(join(cwd, 'dist', 'mcp', 'server.js'), 0o755);
@@ -368,20 +385,20 @@ test('ship check fails when installed MCP server version mismatches package vers
   });
 
   await writeFile(join(cwd, 'package.json'), JSON.stringify({
-    name: 'agentlink', version: '0.2.0', description: 'Local-first coordination bus for coding agents working across repos through durable contracts.', license: 'MIT',
+    name: '@sruthik/agentlink', version: '0.2.0', description: 'Local-first coordination bus for coding agents working across repos through durable contracts.', license: 'MIT',
     homepage: 'https://github.com/sruthik27/agentlink#readme', repository: { type: 'git', url: 'git+https://github.com/sruthik27/agentlink.git' }, bugs: { url: 'https://github.com/sruthik27/agentlink/issues' },
     engines: { node: '>=20' }, publishConfig: { access: 'public' }, bin: { agentlink: './dist/cli.js', 'agentlink-mcp': './dist/mcp/server.js' },
     files: ['README.md', 'LICENSE', 'CHANGELOG.md', 'release-notes-v0.2.0.md', 'demos/agentlink-demo.gif', 'demos/agentlink-demo.cast', 'dist/**/*.js', 'dist/**/*.d.ts'],
     scripts: { agentlink: 'node dist/cli.js', build: 'tsc -p tsconfig.json', test: 'node --test' }, keywords: ['mcp', 'tmux', 'multi-agent'],
   }), 'utf8');
-  await writeFile(join(cwd, 'README.md'), ['# AgentLink','npx agentlink doctor','npm install -g agentlink','agentlink setup --harness all','cross-repo contract negotiation','Structured bus is source of truth','tmux pane messaging is notification/bridge','npm run agentlink -- setup','npm run agentlink -- doctor','npm run agentlink -- ship-check','npm run agentlink -- demo --peer ../peer-repo','npm run agentlink -- replay','npm run agentlink -- version','npm run agentlink -- launch-brief','node dist/mcp/server.js','![AgentLink terminal demo](demos/agentlink-demo.gif)','asciinema play demos/agentlink-demo.cast','release-notes-v0.2.0.md'].join('\n'), 'utf8');
+  await writeFile(join(cwd, 'README.md'), ['# AgentLink','npx @sruthik/agentlink doctor','npm install -g @sruthik/agentlink','agentlink setup --harness all','cross-repo contract negotiation','Structured bus is source of truth','tmux pane messaging is notification/bridge','npm run agentlink -- setup','npm run agentlink -- doctor','npm run agentlink -- ship-check','npm run agentlink -- demo --peer ../peer-repo','npm run agentlink -- replay','npm run agentlink -- version','npm run agentlink -- launch-brief','node dist/mcp/server.js','![AgentLink terminal demo](demos/agentlink-demo.gif)','asciinema play demos/agentlink-demo.cast','release-notes-v0.2.0.md'].join('\n'), 'utf8');
   await writeFile(join(cwd, 'LICENSE'), 'MIT\n', 'utf8');
   await writeFile(join(cwd, 'CHANGELOG.md'), '# Changelog\n', 'utf8');
   await writeFile(join(cwd, 'release-notes-v0.2.0.md'), '## AgentLink 0.2.0\n### Verification before release\nLocal tests passed.\n### Known limitation\nGitHub Actions did not run.\n', 'utf8');
   await mkdir(join(cwd, 'dist', 'mcp'), { recursive: true });
   await mkdir(join(cwd, 'demos'), { recursive: true });
   await writeFile(join(cwd, 'dist', 'cli.js'), '#!/usr/bin/env node\nconsole.log(\'0.2.0\');\n', 'utf8');
-  await writeFile(join(cwd, 'dist', 'mcp', 'server.js'), fakeMcpServer('0.1.0'), 'utf8');
+  await writeFile(join(cwd, 'dist', 'mcp', 'server.js'), fakeMcpServer('0.1.1'), 'utf8');
   await chmod(join(cwd, 'dist', 'cli.js'), 0o755);
   await chmod(join(cwd, 'dist', 'mcp', 'server.js'), 0o755);
   await writeFile(join(cwd, 'demos', 'agentlink-demo.gif'), validGif);
@@ -403,8 +420,8 @@ test('ship check fails when launch release notes are ignored by git', async (t) 
   await writeFile(join(cwd, '.gitignore'), 'release-notes-v*.md\n', 'utf8');
   await writeFile(join(cwd, 'README.md'), [
     '# AgentLink',
-    'npx agentlink doctor',
-    'npm install -g agentlink',
+    'npx @sruthik/agentlink doctor',
+    'npm install -g @sruthik/agentlink',
     'agentlink setup --harness all',
     'cross-repo contract negotiation',
     'Structured bus is source of truth',
@@ -419,10 +436,10 @@ test('ship check fails when launch release notes are ignored by git', async (t) 
     'node dist/mcp/server.js',
     '![AgentLink terminal demo](demos/agentlink-demo.gif)',
     'asciinema play demos/agentlink-demo.cast',
-    'release-notes-v0.1.0.md',
+    'release-notes-v0.1.1.md',
   ].join('\n'), 'utf8');
-  await writeFile(join(cwd, 'release-notes-v0.1.0.md'), [
-    '## AgentLink 0.1.0',
+  await writeFile(join(cwd, 'release-notes-v0.1.1.md'), [
+    '## AgentLink 0.1.1',
     '### Verification before release',
     'Local tests passed.',
     '### Known limitation',

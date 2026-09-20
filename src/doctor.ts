@@ -80,7 +80,7 @@ export async function collectDoctorReport(
   } else {
     const name = typeof manifest.name === 'string' ? manifest.name : 'unnamed';
     checks.push(check('ok', 'package.json', name));
-    if (name === 'agentlink') {
+    if (name === '@sruthik/agentlink') {
       const scripts = manifest.scripts && typeof manifest.scripts === 'object'
         ? Object.keys(manifest.scripts as Record<string, unknown>).sort()
         : [];

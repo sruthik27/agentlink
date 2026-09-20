@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.1.1 - 2026-09-21
+
+Patch release correcting the npm package identity to `@sruthik/agentlink`.
+
+### Changed
+
+- Renamed the npm package from `agentlink` to `@sruthik/agentlink` while preserving the `agentlink` and `agentlink-mcp` executable names.
+- Updated setup guidance, README install commands, ship checks, fixtures, and release metadata for the scoped package.
+
+### Fixed
+
+- Aligned version-derived release notes and packed-package checks with version 0.1.1.
+- Ensured `doctor` recognizes the scoped AgentLink package when validating required npm scripts.
+
 ## 0.1.0 - 2026-08-03
 
 Initial public release candidate.

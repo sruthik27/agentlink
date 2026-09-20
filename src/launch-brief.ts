@@ -32,7 +32,7 @@ function releaseNotesFileName(version: string | undefined): string {
   const normalized = version?.trim();
   return normalized && /^\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?$/.test(normalized)
     ? `release-notes-v${normalized}.md`
-    : 'release-notes-v0.1.0.md';
+    : 'release-notes-v0.1.1.md';
 }
 
 export async function collectLaunchBrief(cwd = process.cwd()): Promise<LaunchBrief> {
@@ -40,7 +40,7 @@ export async function collectLaunchBrief(cwd = process.cwd()): Promise<LaunchBri
   const builtCliPath = join(resolve(cwd), 'dist', 'cli.js');
   const releaseNotesPath = releaseNotesFileName(manifest.version);
   return {
-    packageName: manifest.name ?? 'agentlink',
+    packageName: manifest.name ?? '@sruthik/agentlink',
     ...(manifest.version ? { version: manifest.version } : {}),
     productThesis: 'AgentLink is a local-first coordination bus for coding-agent harnesses doing cross-repo contract negotiation. Structured .agentlink state is the source of truth; tmux is only discovery/notification; MCP/CLI are harness surfaces.',
     launchBoundary: 'Do not npm publish, push, create releases, or announce publicly without explicit Sruthik approval.',

@@ -38,9 +38,9 @@ async function readAgentLinkPackage(): Promise<{ name: string; version?: string 
         name?: unknown;
         version?: unknown;
       };
-      if (parsed.name === 'agentlink') {
+      if (parsed.name === '@sruthik/agentlink') {
         return {
-          name: 'agentlink',
+          name: '@sruthik/agentlink',
           ...(typeof parsed.version === 'string' ? { version: parsed.version } : {}),
         };
       }
@@ -51,7 +51,7 @@ async function readAgentLinkPackage(): Promise<{ name: string; version?: string 
     if (next === cursor) break;
     cursor = next;
   }
-  return { name: 'agentlink' };
+  return { name: '@sruthik/agentlink' };
 }
 
 export function parseSetupHarness(value: string): SetupHarness {
@@ -166,8 +166,8 @@ export function renderSetupGuideMarkdown(guide: SetupGuide): string {
     '',
     `- Package: ${guide.packageName}${guide.version ? ` ${guide.version}` : ''}`,
     `- Workspace: ${guide.workspacePath}`,
-    '- Install: `npm install -g agentlink` or run with `npx agentlink ...`',
-    '- Quick check: `npx agentlink doctor`',
+    '- Install: `npm install -g @sruthik/agentlink` or run with `npx @sruthik/agentlink ...`',
+    '- Quick check: `npx @sruthik/agentlink doctor`',
     '- Smoke test: `agentlink doctor`, then add `agentlink-mcp` to your coding agent MCP config.',
     '',
     '## MCP Server',
