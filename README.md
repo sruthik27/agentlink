@@ -1,4 +1,8 @@
-# AgentLink
+# AgentLink — MCP coordination for coding agents
+
+[Website & quickstart](https://sruthik27.github.io/agentlink/) · [npm package](https://www.npmjs.com/package/@sruthik/agentlink) · [Releases](https://github.com/sruthik27/agentlink/releases)
+
+AgentLink by **Sruthik Issac** is published as **`@sruthik/agentlink`** on npm.
 
 AgentLink is a local-first coordination layer for multiple coding agents — Claude Code, Codex CLI, GitHub Copilot CLI, OpenCode, Gemini CLI, and similar harnesses — working across related repositories.
 
