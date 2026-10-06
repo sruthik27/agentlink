@@ -1,16 +1,29 @@
 #!/usr/bin/env node
 import { readFile, realpath } from 'node:fs/promises';
-import { dirname, join } from 'node:path';
+import { dirname, isAbsolute, join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import {
   appendMessage,
+  ackMessages,
   approveConversation,
+  capWarning,
   closeConversation,
+  countRevisionApprovals,
   createConversation,
   ensureWorkspace,
+  joinConversation,
   listConversations,
+  MESSAGE_KINDS,
+  MESSAGE_REFERENCE_TYPES,
   readConversationRecords,
+  readMessage,
+  readMessages,
   resolveConversation,
+  revokeConversationParticipant,
+  setMessageCap,
+  waitForMessages,
+  type MessageKind,
+  type MessageReference,
   type ConversationRecord,
 } from './store.js';
 import {
@@ -19,13 +32,27 @@ import {
   contractPath,
   initializeContract,
   readContractState,
+  refreshContractCompatibilityView,
   syncContractToWorkspace,
+  updateConversationContract,
   updateContractSections,
   updateContractStatus,
   writeConversationContract,
   type ContractStatus,
   type ContractTemplate,
 } from './contract.js';
+import {
+  listParticipants,
+  heartbeatAgent,
+  listAgentRegistrations,
+  registerParticipant,
+  registerAgent,
+  relabelParticipant,
+  resolveActiveParticipant,
+  rotateWorkspaceIdentity,
+  selectParticipant,
+  unregisterAgent,
+} from './workspace.js';
 import { filterAgentPanes, listTmuxPanes } from './tmux.js';
 import {
   deliverTmuxMessage,
@@ -38,16 +65,42 @@ import { collectDoctorReport, renderDoctorReport } from './doctor.js';
 import { collectLaunchBrief, renderLaunchBriefMarkdown } from './launch-brief.js';
 import { collectShipCheckReport, renderShipCheckReport } from './ship-check.js';
 import { collectSetupGuide, parseSetupHarness, renderSetupGuideMarkdown } from './setup.js';
+import {
+  configureTrustedNotificationAdapter,
+  listTrustedNotificationAdapters,
+  notifyMessage,
+  receiveNotification,
+  retryNotification,
+} from './notifications.js';
+import {
+  enqueueCodexWake,
+  enrollCodexWake,
+  readCodexWakeStatus,
+  requestCodexWakeStop,
+  retryCodexWakeJob,
+  runCodexWakeOnce,
+  runCodexWakeSupervisor,
+  setCodexWakePaused,
+} from './auto-wake.js';
 
 const help = `AgentLink — local-first cross-repo coding-agent coordination
 
 Usage:
-  agentlink init
+  agentlink init [--new-workspace]
       Create .agentlink workspace files in the current repo
-  agentlink list
-      List active coding-agent tmux panes
-  agentlink start --topic <topic> [--target <pane-or-agent>] [--template <template>] [--max-rounds <count>] [--required-approvals <count>]
+  agentlink actor <show|list|add|use|rename> [--name <label>] [--id <participant-id>]
+      Configure stable participant identity; labels are display metadata only
+  agentlink register --label <name> [--client <kind>] [--ttl <seconds>] [--adapter <trusted-adapter-id>] [--id <registration-id>]
+      Register this stable actor as an expiring IDE/harness participant on the shared bus
+  agentlink heartbeat --registration <id> [--ttl <seconds>]
+      Renew a registration owned by the configured actor
+  agentlink unregister --registration <id>
+      Remove a registration owned by the configured actor
+  agentlink list [--tmux]
+      List active bus registrations; --tmux shows the optional pane-discovery capability
+  agentlink start --topic <topic> [--target <pane-or-agent>] [--template <template>] [--max-messages <count>] [--max-rounds <count>] [--required-approvals <count>]
       Start a conversation and prepare CONTRACT.md
+      Message limits are optional and count messages; --max-rounds is a compatibility alias
       Templates: ${CONTRACT_TEMPLATES.join(', ')}
   agentlink status
       List conversations and the current contract status
@@ -65,19 +118,39 @@ Usage:
       Print the final human approval brief, verification commands, artifacts, and launch boundary
   agentlink version
       Print the installed AgentLink package version
-  agentlink send --body <message> [--role <role>] [--from <sender>] [--conversation <id>] [--deliver-to <pane-id>]
-      Append a structured message, then optionally deliver it to a tmux pane
-      (defaults: role=user, from=human; delivery is off by default)
-  agentlink read [--conversation <id>] [--limit <count>]
-      Print recent messages (defaults to the latest conversation)
+  agentlink join [--conversation <id>]
+      Join the selected conversation as the configured participant
+  agentlink revoke --conversation <id> --participant <participant-id>
+      As conversation owner, revoke a participant's eligibility while preserving audit history
+  agentlink send --body <message> [--role <role>] [--kind <kind>] [--refs <type:value,...>] [--conversation <id>] [--to <participant-id>] [--notify] [--deliver-to <pane-id>]
+      Append a structured message, then automatically enqueue eligible enrolled recipients
+      (--notify remains a compatibility flag; defaults: role=user, sender=configured participant)
+  agentlink read [--conversation <id>] [--after <cursor>|--since <message-id>] [--limit <count>]
+      Page ordered messages without acknowledging them; implicit targeting is allowed only when unambiguous
+  agentlink wait --conversation <id> (--after <cursor>|--since <message-id>) [--timeout-ms <1-30000>] [--limit <count>]
+      Wait a bounded time for new messages; timeout returns normally without acknowledging
+  agentlink ack --conversation <id> (--message-id <id>|--cursor <cursor>)
+      Durably acknowledge processing for the configured participant
+  agentlink cap --conversation <id> (--set <count>|--remove)
+      As conversation owner, set/raise or remove the optional message cap
   agentlink replay [--conversation <id>] [--format <text|json>]
       Print the full append-only conversation timeline, including approvals and close events
-  agentlink contract [--status <Draft|Proposed|Accepted|Blocked|Implemented|Verified>] [--set-section <heading> --content <markdown>] [--sync-to <repo-path>]
-      Print/update the current contract state or merge one section, and optionally copy it to another repo workspace
-  agentlink approve --from <participant> [--conversation <id>]
-      Record a participant approval toward the conversation's acceptance gate
-  agentlink end [--conversation <id>]
-      Close a conversation (defaults to the latest open conversation)
+  agentlink contract [--conversation <id>] [--refresh] [--if-revision <sha256>] [--status <Draft|Proposed|Accepted|Blocked|Implemented|Verified>] [--set-section <heading> --content <markdown>] [--sync-to <repo-path>]
+      Print/update authoritative contract state; --refresh explicitly regenerates the read-only compatibility view
+  agentlink approve [--conversation <id>]
+      Record the configured participant's approval for the current contract revision
+  agentlink end --conversation <id>
+      Close an explicitly identified conversation
+  agentlink notify trust --id <adapter-id> --argv-json <json-array> [--timeout-ms <1-10000>]
+      Store an argv-only adapter in user trust config outside the repo (never runs through a shell)
+  agentlink notify <list|retry> [--event <event-id>]
+      Inspect trusted adapter ids or explicitly retry a failed/deduplicated notification event
+  agentlink receiver --inbox <absolute-path> --event-id <id> --bus-id <id> --conversation-id <id> --message-id <id> --registration-id <id>
+      Concrete local receiver used by a trusted adapter; records event references only and deduplicates by event id
+  agentlink wake enroll --recipient <id> --conversation <id[,id...]> --codex <absolute-path> [--config <absolute-path>] [--state <absolute-path>] [--trust-config <absolute-path>] [--model <model>]
+      Enroll this workspace actor as a supervised headless Codex recipient using user-owned config/state
+  agentlink wake <run|once|status|pause|resume|stop|retry> --config <absolute-path> [--job <job-id>]
+      Run or inspect the durable serial recipient queue; stop/pause never delete contracts
   agentlink help
       Show this help
 `;
@@ -127,7 +200,7 @@ async function readPackageVersion(cwd: string): Promise<string> {
   return 'unknown';
 }
 
-function parseArguments(args: string[]): ParsedArguments {
+function parseArguments(args: string[], booleanOptions: string[] = []): ParsedArguments {
   const options: Record<string, string> = {};
   const positionals: string[] = [];
 
@@ -141,6 +214,11 @@ function parseArguments(args: string[]): ParsedArguments {
     const equalsIndex = argument.indexOf('=');
     const name = argument.slice(2, equalsIndex === -1 ? undefined : equalsIndex);
     const inlineValue = equalsIndex === -1 ? undefined : argument.slice(equalsIndex + 1);
+    if (booleanOptions.includes(name)) {
+      if (inlineValue !== undefined) throw new UsageError(`Option --${name} does not take a value`);
+      options[name] = 'true';
+      continue;
+    }
     const value = inlineValue ?? args[index + 1];
     if (!name || value === undefined || (inlineValue === undefined && value.startsWith('--'))) {
       throw new UsageError(`Option --${name || '?'} requires a value`);
@@ -188,10 +266,31 @@ function parseContractTemplateOption(value: string): ContractTemplate {
   return template;
 }
 
+function parseMessageKindOption(value: string): MessageKind {
+  const kind = MESSAGE_KINDS.find((candidate) => candidate === value.trim().toLowerCase());
+  if (!kind) throw new UsageError(`Invalid message kind: ${value}. Expected one of: ${MESSAGE_KINDS.join(', ')}`);
+  return kind;
+}
+
+function parseMessageReferencesOption(value: string): MessageReference[] {
+  if (!value.trim()) throw new UsageError('--refs cannot be empty');
+  return value.split(',').map((entry) => {
+    const separator = entry.indexOf(':');
+    if (separator <= 0) throw new UsageError(`Invalid message reference: ${entry}. Expected type:value.`);
+    const type = entry.slice(0, separator).trim();
+    const referenceValue = entry.slice(separator + 1);
+    if (!MESSAGE_REFERENCE_TYPES.includes(type as MessageReference['type'])) {
+      throw new UsageError(`Invalid message reference type: ${type}. Expected one of: ${MESSAGE_REFERENCE_TYPES.join(', ')}`);
+    }
+    return { type: type as MessageReference['type'], value: referenceValue };
+  });
+}
+
 function renderConversationRecord(record: ConversationRecord): string {
   if (record.type === 'conversation') {
     const target = record.target ? ` -> ${record.target}` : '';
-    const limits = record.maxRounds ? `, max ${record.maxRounds} rounds` : '';
+    const cap = record.messageCap ?? record.maxRounds;
+    const limits = cap ? `, message cap ${cap}` : '';
     const approvals = record.requiredApprovals ? `, requires ${record.requiredApprovals} approvals` : '';
     return `${record.createdAt} conversation started: ${record.topic}${target}${limits}${approvals}`;
   }
@@ -199,8 +298,12 @@ function renderConversationRecord(record: ConversationRecord): string {
     return `${record.timestamp} message ${record.role}/${record.from}: ${record.body}`;
   }
   if (record.type === 'approval') {
-    return `${record.timestamp} approval from ${record.from}`;
+    const revision = record.revision ? ` for revision ${record.revision}` : '';
+    return `${record.timestamp} approval from ${record.from}${revision}`;
   }
+  if (record.type === 'participant') return `${record.timestamp} participant joined: ${record.displayName} (${record.participantId})`;
+  if (record.type === 'participant_revoked') return `${record.timestamp} participant revoked: ${record.participantId} by ${record.revokedByParticipantId}`;
+  if (record.type === 'settings') return `${record.timestamp} message cap: ${record.messageCap ?? 'unlimited'} (owner ${record.participantId})`;
   return `${record.timestamp} status: ${record.status}`;
 }
 
@@ -228,33 +331,128 @@ export async function runCli(
   }
 
   if (command === 'list') {
-    if (args.length > 1) throw new UsageError('Usage: agentlink list');
-    const panes = filterAgentPanes(await listTmuxPanes());
-    if (panes.length === 0) {
-      output.log('No active coding-agent tmux panes found. Start Claude Code/Codex/OpenCode inside tmux, then retry.');
+    if (args.length > 2 || (args[1] !== undefined && args[1] !== '--tmux')) throw new UsageError('Usage: agentlink list [--tmux]');
+    if (args[1] === '--tmux') {
+      const panes = filterAgentPanes(await listTmuxPanes());
+      if (panes.length === 0) {
+        output.log('tmux capability unavailable or no coding-agent panes found; core registry and messaging remain available.');
+        return;
+      }
+      for (const [index, pane] of panes.entries()) {
+        output.log(`${index + 1}. ${pane.agentKind.padEnd(8)} ${pane.paneId.padEnd(4)} ${pane.sessionName}:${pane.windowIndex}.${pane.paneIndex} ${pane.currentPath}`);
+      }
       return;
     }
-    for (const [index, pane] of panes.entries()) {
-      output.log(`${index + 1}. ${pane.agentKind.padEnd(8)} ${pane.paneId.padEnd(4)} ${pane.sessionName}:${pane.windowIndex}.${pane.paneIndex} ${pane.currentPath}`);
+    const registrations = await listAgentRegistrations(cwd);
+    if (registrations.length === 0) {
+      output.log('No active AgentLink registrations. Run `agentlink register --label <name>` in each peer workspace.');
+      return;
+    }
+    for (const registration of registrations) {
+      output.log(`${registration.registrationId} ${registration.label} [${registration.clientKind}] participant=${registration.participantId} workspace=${registration.workspaceId} expires=${registration.expiresAt}${registration.notificationAdapterId ? ` adapter=${registration.notificationAdapterId}` : ''}`);
     }
     return;
   }
 
   if (command === 'init') {
-    if (args.length > 1) throw new UsageError('Usage: agentlink init');
+    if (args.length === 2 && args[1] === '--new-workspace') {
+      const identity = await rotateWorkspaceIdentity(cwd);
+      output.log(`AgentLink workspace identity rotated: ${identity.workspaceId}`);
+      return;
+    }
+    if (args.length > 1) throw new UsageError('Usage: agentlink init [--new-workspace]');
     const path = await initWorkspace(cwd);
     output.log(`AgentLink workspace ready: ${path}`);
     return;
   }
 
-  const { options, positionals } = parseArguments(args.slice(1));
+  const booleanOptions = command === 'contract'
+    ? ['refresh']
+    : command === 'cap'
+      ? ['remove']
+      : command === 'send'
+        ? ['notify']
+        : [];
+  const { options, positionals } = parseArguments(args.slice(1), booleanOptions);
+
+  if (command === 'actor') {
+    rejectUnknownOptions(options, ['name', 'id']);
+    const action = positionals[0] ?? 'show';
+    if (positionals.length > 1) throw new UsageError('Usage: agentlink actor <show|list|add|use|rename> [--name <label>] [--id <participant-id>]');
+    if (action === 'show') {
+      const actor = await resolveActiveParticipant(cwd);
+      output.log(`${actor.participantId} ${actor.displayName} (workspace ${actor.workspaceId})`);
+      return;
+    }
+    if (action === 'list') {
+      const active = await resolveActiveParticipant(cwd);
+      for (const participant of await listParticipants(cwd)) output.log(`${participant.participantId === active.participantId ? '*' : ' '} ${participant.participantId} ${participant.displayName}`);
+      return;
+    }
+    if (action === 'add') {
+      if (!options.name) throw new UsageError('Usage: agentlink actor add --name <label>');
+      const participant = await registerParticipant(cwd, { displayName: options.name });
+      output.log(`Participant registered and selected: ${participant.participantId} ${participant.displayName}`);
+      return;
+    }
+    if (action === 'use') {
+      if (!options.id) throw new UsageError('Usage: agentlink actor use --id <participant-id>');
+      const participant = await selectParticipant(cwd, options.id);
+      output.log(`Participant selected: ${participant.participantId} ${participant.displayName}`);
+      return;
+    }
+    if (action === 'rename') {
+      if (!options.id || !options.name) throw new UsageError('Usage: agentlink actor rename --id <participant-id> --name <label>');
+      const participant = await relabelParticipant(cwd, options.id, options.name);
+      output.log(`Participant renamed: ${participant.participantId} ${participant.displayName}`);
+      return;
+    }
+    throw new UsageError(`Unknown actor action: ${action}`);
+  }
+
+  if (command === 'register') {
+    rejectUnknownOptions(options, ['label', 'client', 'ttl', 'adapter', 'id']);
+    if (positionals.length > 0 || !options.label) {
+      throw new UsageError('Usage: agentlink register --label <name> [--client <kind>] [--ttl <seconds>] [--adapter <trusted-adapter-id>] [--id <registration-id>]');
+    }
+    const registration = await registerAgent(cwd, {
+      label: options.label,
+      clientKind: options.client,
+      notificationAdapterId: options.adapter,
+      registrationId: options.id,
+      ttlSeconds: options.ttl === undefined ? undefined : parsePositiveIntegerOption(options.ttl, 'ttl'),
+    });
+    output.log(`Agent registered: ${registration.registrationId} participant=${registration.participantId} expires=${registration.expiresAt}`);
+    if (registration.notificationAdapterId) output.log(`Notification adapter reference: ${registration.notificationAdapterId} (execution still requires user trust config)`);
+    return;
+  }
+
+  if (command === 'heartbeat') {
+    rejectUnknownOptions(options, ['registration', 'ttl']);
+    if (positionals.length > 0 || !options.registration) throw new UsageError('Usage: agentlink heartbeat --registration <id> [--ttl <seconds>]');
+    const registration = await heartbeatAgent(
+      cwd,
+      options.registration,
+      options.ttl === undefined ? undefined : parsePositiveIntegerOption(options.ttl, 'ttl'),
+    );
+    output.log(`Heartbeat renewed: ${registration.registrationId} expires=${registration.expiresAt}`);
+    return;
+  }
+
+  if (command === 'unregister') {
+    rejectUnknownOptions(options, ['registration']);
+    if (positionals.length > 0 || !options.registration) throw new UsageError('Usage: agentlink unregister --registration <id>');
+    await unregisterAgent(cwd, options.registration);
+    output.log(`Agent unregistered: ${options.registration}`);
+    return;
+  }
 
   if (command === 'start') {
-    rejectUnknownOptions(options, ['topic', 'target', 'template', 'max-rounds', 'required-approvals']);
+    rejectUnknownOptions(options, ['topic', 'target', 'template', 'max-messages', 'max-rounds', 'required-approvals']);
     const topic = options.topic ?? positionals.join(' ');
     if (!topic.trim()) {
       throw new UsageError(
-        'Usage: agentlink start --topic <topic> [--target <pane-or-agent>] [--template <template>] [--max-rounds <count>] [--required-approvals <count>]',
+        'Usage: agentlink start --topic <topic> [--target <pane-or-agent>] [--template <template>] [--max-messages <count>] [--max-rounds <count>] [--required-approvals <count>]',
       );
     }
     const template = options.template === undefined
@@ -263,12 +461,19 @@ export async function runCli(
     const maxRounds = options['max-rounds'] === undefined
       ? undefined
       : parsePositiveIntegerOption(options['max-rounds'], 'max-rounds');
+    const maxMessages = options['max-messages'] === undefined
+      ? undefined
+      : parsePositiveIntegerOption(options['max-messages'], 'max-messages');
+    if (maxMessages !== undefined && maxRounds !== undefined && maxMessages !== maxRounds) {
+      throw new UsageError('--max-messages and compatibility --max-rounds cannot specify different message caps');
+    }
     const requiredApprovals = options['required-approvals'] === undefined
       ? undefined
       : parsePositiveIntegerOption(options['required-approvals'], 'required-approvals');
     const conversation = await createConversation(cwd, {
       topic,
       target: options.target,
+      maxMessages,
       maxRounds,
       requiredApprovals,
     });
@@ -280,7 +485,11 @@ export async function runCli(
     });
     output.log(`Started conversation ${conversation.id}: ${conversation.topic}`);
     if (conversation.target) output.log(`Target: ${conversation.target}`);
-    if (conversation.maxRounds) output.log(`Max rounds: ${conversation.maxRounds}`);
+    if (conversation.messageCap) {
+      output.log(maxRounds !== undefined
+        ? `Max rounds: ${conversation.messageCap} (compatibility alias; counts messages)`
+        : `Message cap: ${conversation.messageCap}`);
+    }
     if (conversation.requiredApprovals) output.log(`Required approvals: ${conversation.requiredApprovals}`);
     output.log(`Contract: ${contractPath(cwd)}`);
     return;
@@ -298,9 +507,9 @@ export async function runCli(
       for (const conversation of conversations) {
         const active = conversation.id === activeId ? '*' : ' ';
         const target = conversation.target ? ` -> ${conversation.target}` : '';
-        const limits = conversation.maxRounds ? `, max ${conversation.maxRounds} rounds` : '';
+        const limits = conversation.messageCap ? `, message cap ${conversation.messageCap}` : '';
         const approvals = conversation.requiredApprovals
-          ? `, approvals ${conversation.approvals.length}/${conversation.requiredApprovals}`
+          ? `, approvals ${conversation.currentApprovalCount}/${conversation.requiredApprovals}`
           : '';
         output.log(`${active} ${conversation.id} [${conversation.status}] ${conversation.topic}${target} (${conversation.messageCount} messages${limits}${approvals})`);
       }
@@ -392,7 +601,7 @@ export async function runCli(
   }
 
   if (command === 'send') {
-    rejectUnknownOptions(options, ['body', 'conversation', 'role', 'from', 'deliver-to']);
+    rejectUnknownOptions(options, ['body', 'conversation', 'role', 'from', 'kind', 'refs', 'notify', 'deliver-to', 'to']);
     const body = options.body ?? positionals.join(' ');
     if (!body.trim()) {
       throw new UsageError('Usage: agentlink send --body <message> [--role <role>] [--from <sender>] [--conversation <id>] [--deliver-to <pane-id>]');
@@ -400,10 +609,19 @@ export async function runCli(
     const conversation = await resolveConversation(cwd, options.conversation);
     const message = await appendMessage(cwd, conversation.id, {
       role: options.role ?? 'user',
-      from: options.from ?? 'human',
+      ...(options.from ? { from: options.from } : {}),
       body,
+      ...(options.kind ? { kind: parseMessageKindOption(options.kind) } : {}),
+      ...(options.refs ? { refs: parseMessageReferencesOption(options.refs) } : {}),
+      ...(options.to ? { recipientParticipantId: options.to } : {}),
     });
-    output.log(`Message appended to ${conversation.id} at ${message.timestamp}`);
+    output.log(`Persisted message ${message.messageId} in ${conversation.id} at ${message.timestamp}`);
+    output.log(`Message appended to ${conversation.id}`);
+    const notification = await notifyMessage(cwd, conversation.id, message.messageId!, message.participantId!);
+    output.log(`Notification: ${notification.attempted ? `attempted; delivered=${notification.delivered}, failed=${notification.failed}` : 'not attempted; no active eligible adapter registration'}. Processing acknowledgement: pending.`);
+    for (const warningText of notification.warnings) output.log(`Warning: ${warningText}`);
+    const warning = capWarning(await resolveConversation(cwd, conversation.id));
+    if (warning) output.log(`Warning: ${warning}`);
     if (options['deliver-to']) {
       const result = await deliverMessage({
         paneId: options['deliver-to'],
@@ -417,8 +635,18 @@ export async function runCli(
     return;
   }
 
+  if (command === 'join') {
+    rejectUnknownOptions(options, ['conversation']);
+    const positionalId = oneOptionalPositional(positionals, 'join');
+    if (positionalId && options.conversation) throw new UsageError('Specify the conversation id either positionally or with --conversation, not both');
+    const conversation = await resolveConversation(cwd, options.conversation ?? positionalId);
+    const joined = await joinConversation(cwd, conversation.id);
+    output.log(`Participant ${joined.participantId} joined conversation ${conversation.id}`);
+    return;
+  }
+
   if (command === 'read') {
-    rejectUnknownOptions(options, ['conversation', 'limit']);
+    rejectUnknownOptions(options, ['conversation', 'after', 'since', 'limit', 'message-id']);
     const positionalId = oneOptionalPositional(positionals, 'read');
     if (positionalId && options.conversation) {
       throw new UsageError('Specify the conversation id either positionally or with --conversation, not both');
@@ -430,15 +658,77 @@ export async function runCli(
       options.conversation ?? positionalId,
       { allowLatestClosed: true },
     );
-    output.log(`Conversation ${conversation.id} [${conversation.status}]: ${conversation.topic}`);
-    const messages = conversation.messages.slice(-limit);
-    if (messages.length === 0) {
-      output.log('No messages.');
+    if (options['message-id']) {
+      if (options.after || options.since || options.limit) throw new UsageError('--message-id cannot be combined with --after, --since, or --limit');
+      const message = await readMessage(cwd, conversation.id, options['message-id']);
+      const metadata = [`id=${message.messageId}`, `seq=${message.sequence}`, ...(message.kind ? [`kind=${message.kind}`] : []), ...(message.recipientParticipantId ? [`to=${message.recipientParticipantId}`] : [])].join(' ');
+      output.log(`Conversation ${conversation.id} [${conversation.status}]: ${conversation.topic}`);
+      output.log(`${message.timestamp} ${message.role}/${message.from} ${metadata}: ${message.body}`);
       return;
     }
-    for (const message of messages) {
-      output.log(`${message.timestamp} ${message.role}/${message.from}: ${message.body}`);
+    const page = await readMessages(cwd, conversation.id, {
+      after: options.after,
+      since: options.since,
+      limit,
+    });
+    output.log(`Conversation ${conversation.id} [${conversation.status}]: ${conversation.topic}`);
+    const messages = page.messages;
+    if (messages.length === 0) {
+      output.log('No messages.');
+    } else {
+      for (const message of messages) {
+        const metadata = [`id=${message.messageId}`, `seq=${message.sequence}`, ...(message.kind ? [`kind=${message.kind}`] : [])].join(' ');
+        output.log(`${message.timestamp} ${message.role}/${message.from} ${metadata}: ${message.body}`);
+      }
     }
+    output.log(`Next cursor: ${page.nextCursor}`);
+    output.log(`Has more: ${page.hasMore}`);
+    output.log(`Unread: ${page.unreadCount}`);
+    return;
+  }
+
+  if (command === 'wait') {
+    rejectUnknownOptions(options, ['conversation', 'after', 'since', 'timeout-ms', 'limit']);
+    if (positionals.length > 0 || !options.conversation || ((options.after === undefined) === (options.since === undefined))) {
+      throw new UsageError('Usage: agentlink wait --conversation <id> (--after <cursor>|--since <message-id>) [--timeout-ms <1-30000>] [--limit <count>]');
+    }
+    const timeoutMs = options['timeout-ms'] === undefined ? 5_000 : parsePositiveIntegerOption(options['timeout-ms'], 'timeout-ms');
+    const limit = options.limit === undefined ? 20 : parsePositiveIntegerOption(options.limit, 'limit');
+    const page = await waitForMessages(cwd, options.conversation, {
+      after: options.after,
+      since: options.since,
+      timeoutMs,
+      limit,
+    });
+    output.log(`Wait outcome: ${page.outcome} after ${page.waitedMs}ms`);
+    for (const message of page.messages) output.log(`${message.timestamp} ${message.role}/${message.from} id=${message.messageId} seq=${message.sequence}: ${message.body}`);
+    output.log(`Next cursor: ${page.nextCursor}`);
+    output.log(`Has more: ${page.hasMore}`);
+    output.log(`Unread: ${page.unreadCount}`);
+    return;
+  }
+
+  if (command === 'ack') {
+    rejectUnknownOptions(options, ['conversation', 'message-id', 'cursor']);
+    if (positionals.length > 0 || !options.conversation) {
+      throw new UsageError('Usage: agentlink ack --conversation <id> (--message-id <id>|--cursor <cursor>)');
+    }
+    const acknowledgement = await ackMessages(cwd, options.conversation, {
+      messageId: options['message-id'],
+      cursor: options.cursor,
+    });
+    output.log(`Acknowledged through ${acknowledgement.acknowledgedMessageId ?? `sequence ${acknowledgement.acknowledgedSequence}`} for ${options.conversation}`);
+    return;
+  }
+
+  if (command === 'cap') {
+    rejectUnknownOptions(options, ['conversation', 'set', 'remove']);
+    if (positionals.length > 0 || !options.conversation || ((options.set === undefined) === (options.remove === undefined))) {
+      throw new UsageError('Usage: agentlink cap --conversation <id> (--set <count>|--remove)');
+    }
+    const cap = options.remove === 'true' ? null : parsePositiveIntegerOption(options.set!, 'set');
+    const conversation = await setMessageCap(cwd, options.conversation, cap);
+    output.log(conversation.messageCap === undefined ? `Message cap removed for ${conversation.id}` : `Message cap: ${conversation.messageCap} for ${conversation.id}`);
     return;
   }
 
@@ -471,47 +761,203 @@ export async function runCli(
     if (positionalId && options.conversation) {
       throw new UsageError('Specify the conversation id either positionally or with --conversation, not both');
     }
-    if (!options.from) throw new UsageError('Usage: agentlink approve --from <participant> [--conversation <id>]');
+    if (options.from) throw new UsageError('Approval aliases are no longer accepted. Select a stable actor with `agentlink actor use --id <id>`, then run `agentlink approve`.');
     const conversation = await resolveConversation(cwd, options.conversation ?? positionalId);
-    const approval = await approveConversation(cwd, conversation.id, { from: options.from });
+    const approval = await approveConversation(cwd, conversation.id);
     const updated = await resolveConversation(cwd, conversation.id);
-    const required = updated.requiredApprovals ? ` (${updated.approvals.length}/${updated.requiredApprovals})` : '';
+    const state = updated.requiredApprovals ? await readContractState(cwd, updated.id) : undefined;
+    const currentApprovalCount = state?.revision ? countRevisionApprovals(updated, state.revision) : 0;
+    const required = updated.requiredApprovals ? ` (${currentApprovalCount}/${updated.requiredApprovals})` : '';
     output.log(`Approval recorded for ${conversation.id} from ${approval.from}${required}`);
     return;
   }
 
+  if (command === 'revoke') {
+    rejectUnknownOptions(options, ['conversation', 'participant']);
+    if (positionals.length > 0 || !options.conversation || !options.participant) {
+      throw new UsageError('Usage: agentlink revoke --conversation <id> --participant <participant-id>');
+    }
+    const revoked = await revokeConversationParticipant(cwd, options.conversation, options.participant);
+    output.log(`Revoked participant ${revoked.participantId} from ${options.conversation}; audit record preserved.`);
+    return;
+  }
+
   if (command === 'contract') {
-    rejectUnknownOptions(options, ['status', 'set-section', 'content', 'sync-to']);
+    rejectUnknownOptions(options, ['conversation', 'refresh', 'if-revision', 'status', 'set-section', 'content', 'sync-to']);
     if (positionals.length > 0) {
       throw new UsageError('Usage: agentlink contract [--status <status>] [--set-section <heading> --content <markdown>] [--sync-to <repo-path>]');
     }
     if ((options['set-section'] === undefined) !== (options.content === undefined)) {
       throw new UsageError('--set-section and --content must be provided together');
     }
-    let contract = await readContractState(cwd);
-    if (options.status !== undefined) {
-      const nextStatus = parseContractStatusOption(options.status);
-      if (nextStatus === 'Accepted' && contract.conversationId) {
-        const conversation = await resolveConversation(cwd, contract.conversationId, { allowLatestClosed: true });
-        if (conversation.requiredApprovals && conversation.approvals.length < conversation.requiredApprovals) {
-          throw new UsageError(`Cannot mark Accepted: conversation ${conversation.id} has ${conversation.approvals.length}/${conversation.requiredApprovals} required approvals`);
-        }
+    let contract = await readContractState(cwd, options.conversation);
+    if (options.refresh !== undefined) {
+      if (options.refresh !== 'true') throw new UsageError('--refresh does not take a value');
+      if (options.status !== undefined || options['set-section'] !== undefined || options['if-revision'] !== undefined || options['sync-to'] !== undefined) {
+        throw new UsageError('--refresh cannot be combined with contract mutation or sync options');
       }
-      contract = await updateContractStatus(cwd, nextStatus);
+      if (!contract.conversationId) throw new UsageError('No selected contract. Specify --conversation <id>.');
+      contract = await refreshContractCompatibilityView(cwd, contract.conversationId);
     }
-    if (options['set-section'] !== undefined && options.content !== undefined) {
-      contract = await updateContractSections(cwd, [{
-        heading: options['set-section'],
-        content: options.content,
-      }]);
+    if (options.status !== undefined || options['set-section'] !== undefined) {
+      if (!contract.conversationId) throw new UsageError('No selected contract. Specify --conversation <id>.');
+      contract = await updateConversationContract(cwd, contract.conversationId, {
+        ...(options.status !== undefined ? { status: parseContractStatusOption(options.status) } : {}),
+        ...(options['set-section'] !== undefined && options.content !== undefined ? { sections: [{ heading: options['set-section'], content: options.content }] } : {}),
+        ...(options['if-revision'] ? { expectedRevision: options['if-revision'] } : {}),
+      });
     }
     output.log(`Contract: ${contract.status ?? 'not initialized'}`);
     if (contract.conversationId) output.log(`Conversation: ${contract.conversationId}`);
+    if (contract.revision) output.log(`Revision: ${contract.revision}`);
     output.log(`Path: ${contract.path}`);
     if (options['sync-to']) {
-      const targetPath = await syncContractToWorkspace(cwd, options['sync-to']);
+      const targetPath = await syncContractToWorkspace(cwd, options['sync-to'], contract.conversationId);
       output.log(`Synced contract: ${targetPath}`);
     }
+    return;
+  }
+
+  if (command === 'notify') {
+    rejectUnknownOptions(options, ['id', 'argv-json', 'timeout-ms', 'event']);
+    const action = positionals[0] ?? 'list';
+    if (positionals.length > 1) throw new UsageError('Usage: agentlink notify <trust|list|retry> [options]');
+    if (action === 'list') {
+      if (Object.keys(options).length > 0) throw new UsageError('Usage: agentlink notify list');
+      const adapters = await listTrustedNotificationAdapters(cwd);
+      if (adapters.length === 0) output.log('No trusted notification adapters configured.');
+      for (const adapter of adapters) output.log(`${adapter.id} timeout=${adapter.timeoutMs}ms`);
+      return;
+    }
+    if (action === 'trust') {
+      if (!options.id || !options['argv-json'] || options.event) {
+        throw new UsageError('Usage: agentlink notify trust --id <adapter-id> --argv-json <json-array> [--timeout-ms <1-10000>]');
+      }
+      let argv: unknown;
+      try {
+        argv = JSON.parse(options['argv-json']);
+      } catch {
+        throw new UsageError('--argv-json must be valid JSON');
+      }
+      if (!Array.isArray(argv) || argv.some((value) => typeof value !== 'string')) throw new UsageError('--argv-json must be a JSON array of strings');
+      const path = await configureTrustedNotificationAdapter(cwd, {
+        id: options.id,
+        argv,
+        timeoutMs: options['timeout-ms'] === undefined ? 2_000 : parsePositiveIntegerOption(options['timeout-ms'], 'timeout-ms'),
+      });
+      output.log(`Trusted notification adapter ${options.id} saved in user config: ${path}`);
+      output.log('Adapter argv is intentionally not printed. Repo-controlled data cannot change it and no shell is used.');
+      return;
+    }
+    if (action === 'retry') {
+      if (!options.event || options.id || options['argv-json'] || options['timeout-ms']) throw new UsageError('Usage: agentlink notify retry --event <event-id>');
+      const event = await retryNotification(cwd, options.event);
+      output.log(`Notification ${event.eventId}: ${event.state}; attempts=${event.attempts.length}`);
+      return;
+    }
+    throw new UsageError(`Unknown notify action: ${action}`);
+  }
+
+  if (command === 'wake') {
+    const action = positionals[0];
+    if (!action || positionals.length > 1) throw new UsageError('Usage: agentlink wake <enroll|enqueue|run|once|status|pause|resume|stop|retry> [options]');
+    if (action === 'enroll') {
+      rejectUnknownOptions(options, ['recipient', 'conversation', 'codex', 'config', 'state', 'trust-config', 'model', 'timeout-ms', 'retry-backoff-ms', 'max-attempts', 'poll-ms', 'ttl', 'thread']);
+      if (!options.recipient || !options.conversation || !options.codex) throw new UsageError('Usage: agentlink wake enroll --recipient <id> --conversation <id[,id...]> --codex <absolute-path> [options]');
+      const config = await enrollCodexWake({
+        recipientId: options.recipient,
+        workspacePath: cwd,
+        conversationIds: options.conversation.split(',').map((value) => value.trim()).filter(Boolean),
+        codexExecutable: options.codex,
+        agentlinkCliEntrypoint: fileURLToPath(import.meta.url),
+        ...(options.config ? { configPath: options.config } : {}),
+        ...(options.state ? { statePath: options.state } : {}),
+        ...(options['trust-config'] ? { trustPath: options['trust-config'] } : {}),
+        ...(options.model ? { model: options.model } : {}),
+        ...(options['timeout-ms'] ? { turnTimeoutMs: parsePositiveIntegerOption(options['timeout-ms'], 'timeout-ms') } : {}),
+        ...(options['retry-backoff-ms'] ? { retryBackoffMs: parsePositiveIntegerOption(options['retry-backoff-ms'], 'retry-backoff-ms') } : {}),
+        ...(options['max-attempts'] ? { maxAttempts: parsePositiveIntegerOption(options['max-attempts'], 'max-attempts') } : {}),
+        ...(options['poll-ms'] ? { pollMs: parsePositiveIntegerOption(options['poll-ms'], 'poll-ms') } : {}),
+        ...(options.ttl ? { registrationTtlSeconds: parsePositiveIntegerOption(options.ttl, 'ttl') } : {}),
+        ...(options.thread ? { initialThreadId: options.thread } : {}),
+      });
+      output.log(`Supervised Codex recipient enrolled: ${config.recipientId}`);
+      output.log(`Config: ${config.configPath}`);
+      output.log(`State: ${config.statePath}`);
+      output.log(`Registration: ${config.registrationId} participant=${config.participantId}`);
+      return;
+    }
+    if (!options.config) throw new UsageError(`Usage: agentlink wake ${action} --config <absolute-path>`);
+    if (action === 'enqueue') {
+      rejectUnknownOptions(options, ['config', 'event-id', 'bus-id', 'conversation-id', 'message-id', 'registration-id']);
+      if (!options['event-id'] || !options['bus-id'] || !options['conversation-id'] || !options['message-id'] || !options['registration-id']) {
+        throw new UsageError('Wake enqueue requires event, bus, conversation, message, and registration ids');
+      }
+      const result = await enqueueCodexWake(options.config, {
+        eventId: options['event-id'], busId: options['bus-id'], conversationId: options['conversation-id'],
+        messageId: options['message-id'], registrationId: options['registration-id'],
+      });
+      output.log(`Wake enqueue: ${result.outcome}${result.job ? ` job=${result.job.jobId}` : ''}`);
+      return;
+    }
+    if (action === 'run') {
+      rejectUnknownOptions(options, ['config']);
+      const controller = new AbortController();
+      const stop = (): void => controller.abort();
+      process.once('SIGINT', stop);
+      process.once('SIGTERM', stop);
+      output.log(`Supervised Codex recipient running with config ${options.config}`);
+      try { await runCodexWakeSupervisor(options.config, controller.signal); }
+      finally { process.removeListener('SIGINT', stop); process.removeListener('SIGTERM', stop); }
+      output.log('Supervised Codex recipient stopped.');
+      return;
+    }
+    if (action === 'once') {
+      rejectUnknownOptions(options, ['config']);
+      output.log(JSON.stringify(await runCodexWakeOnce(options.config)));
+      return;
+    }
+    if (action === 'status') {
+      rejectUnknownOptions(options, ['config']);
+      output.log(JSON.stringify(await readCodexWakeStatus(options.config), null, 2));
+      return;
+    }
+    if (action === 'pause' || action === 'resume') {
+      rejectUnknownOptions(options, ['config']);
+      await setCodexWakePaused(options.config, action === 'pause');
+      output.log(`Supervised Codex recipient ${action === 'pause' ? 'paused' : 'resumed'}.`);
+      return;
+    }
+    if (action === 'stop') {
+      rejectUnknownOptions(options, ['config']);
+      await requestCodexWakeStop(options.config);
+      output.log('Supervised Codex recipient stop requested.');
+      return;
+    }
+    if (action === 'retry') {
+      rejectUnknownOptions(options, ['config', 'job']);
+      if (!options.job) throw new UsageError('Usage: agentlink wake retry --config <absolute-path> --job <job-id>');
+      await retryCodexWakeJob(options.config, options.job);
+      output.log(`Supervised Codex job queued for explicit retry: ${options.job}`);
+      return;
+    }
+    throw new UsageError(`Unknown wake action: ${action}`);
+  }
+
+  if (command === 'receiver') {
+    rejectUnknownOptions(options, ['inbox', 'event-id', 'bus-id', 'conversation-id', 'message-id', 'registration-id']);
+    if (positionals.length > 0 || !options.inbox || !options['event-id'] || !options['bus-id'] || !options['conversation-id'] || !options['message-id'] || !options['registration-id']) {
+      throw new UsageError('Usage: agentlink receiver --inbox <absolute-path> --event-id <id> --bus-id <id> --conversation-id <id> --message-id <id> --registration-id <id>');
+    }
+    if (!isAbsolute(options.inbox)) throw new UsageError('--inbox must be an absolute path supplied by trusted user configuration');
+    const outcome = await receiveNotification(options.inbox, {
+      eventId: options['event-id'],
+      busId: options['bus-id'],
+      conversationId: options['conversation-id'],
+      messageId: options['message-id'],
+      registrationId: options['registration-id'],
+    });
+    output.log(`Notification receiver: ${outcome}`);
     return;
   }
 
@@ -521,7 +967,9 @@ export async function runCli(
     if (positionalId && options.conversation) {
       throw new UsageError('Specify the conversation id either positionally or with --conversation, not both');
     }
-    const conversation = await resolveConversation(cwd, options.conversation ?? positionalId);
+    const conversationId = options.conversation ?? positionalId;
+    if (!conversationId) throw new UsageError('Usage: agentlink end --conversation <id>');
+    const conversation = await resolveConversation(cwd, conversationId);
     await closeConversation(cwd, conversation.id);
     output.log(`Closed conversation ${conversation.id}`);
     return;

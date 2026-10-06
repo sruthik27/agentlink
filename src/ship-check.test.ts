@@ -9,7 +9,7 @@ import { collectShipCheckReport, renderShipCheckReport } from './ship-check.js';
 
 const execFileAsync = promisify(execFile);
 
-function fakeMcpServer(version = '0.1.1'): string {
+function fakeMcpServer(version = '0.2.0'): string {
   return `#!/usr/bin/env node
 process.stdin.on('data', () => {
   const body = JSON.stringify({ jsonrpc: '2.0', id: 1, result: { protocolVersion: '2024-11-05', capabilities: { tools: {} }, serverInfo: { name: 'agentlink-mcp', version: '${version}' } } });
@@ -29,7 +29,7 @@ test('ship check reports package, docs, bins, and build readiness', async (t) =>
 
   await writeFile(join(cwd, 'package.json'), JSON.stringify({
     name: '@sruthik/agentlink',
-    version: '0.1.1',
+    version: '0.2.0',
     description: 'Local-first coordination bus for coding agents working across repos through durable contracts.',
     license: 'MIT',
     homepage: 'https://github.com/sruthik27/agentlink#readme',
@@ -45,7 +45,7 @@ test('ship check reports package, docs, bins, and build readiness', async (t) =>
       'README.md',
       'LICENSE',
       'CHANGELOG.md',
-      'release-notes-v0.1.1.md',
+      'release-notes-v0.2.0.md',
       'demos/agentlink-demo.gif',
       'demos/agentlink-demo.cast',
       'dist/**/*.js',
@@ -74,17 +74,26 @@ test('ship check reports package, docs, bins, and build readiness', async (t) =>
     'npm run agentlink -- ship-check',
     'npm run agentlink -- demo --peer ../peer-repo',
     'npm run agentlink -- replay',
+    'agentlink register --label test',
+    'agentlink wait --conversation id --after cursor',
+    'agentlink notify trust',
+    'agentlink wake enroll',
+    'agentlink wake run',
+    'stable participant identities expire only at the presence registration layer',
+    'bounded wait uses user trust for adapters and a supervised/headless Codex recipient',
+    'Migration from 0.1.1',
+    '.agentlink/*',
     'npm run agentlink -- version',
     'npm run agentlink -- launch-brief',
     'node dist/mcp/server.js',
     '![AgentLink terminal demo](demos/agentlink-demo.gif)',
     'asciinema play demos/agentlink-demo.cast',
-    'release-notes-v0.1.1.md',
+    'release-notes-v0.2.0.md',
   ].join('\n'), 'utf8');
   await writeFile(join(cwd, 'LICENSE'), 'MIT\n', 'utf8');
   await writeFile(join(cwd, 'CHANGELOG.md'), '# Changelog\n', 'utf8');
-  await writeFile(join(cwd, 'release-notes-v0.1.1.md'), [
-    '## AgentLink 0.1.1',
+  await writeFile(join(cwd, 'release-notes-v0.2.0.md'), [
+    '## AgentLink 0.2.0',
     '### Verification before release',
     'Local tests passed.',
     '### Known limitation',
@@ -92,7 +101,7 @@ test('ship check reports package, docs, bins, and build readiness', async (t) =>
   ].join('\n'), 'utf8');
   await mkdir(join(cwd, 'dist', 'mcp'), { recursive: true });
   await mkdir(join(cwd, 'demos'), { recursive: true });
-  await writeFile(join(cwd, 'dist', 'cli.js'), '#!/usr/bin/env node\nconsole.log(\'0.1.1\');\n', 'utf8');
+  await writeFile(join(cwd, 'dist', 'cli.js'), '#!/usr/bin/env node\nconsole.log(\'0.2.0\');\n', 'utf8');
   await writeFile(join(cwd, 'dist', 'mcp', 'server.js'), fakeMcpServer(), 'utf8');
   await chmod(join(cwd, 'dist', 'cli.js'), 0o755);
   await chmod(join(cwd, 'dist', 'mcp', 'server.js'), 0o755);
@@ -102,11 +111,11 @@ test('ship check reports package, docs, bins, and build readiness', async (t) =>
   const report = await collectShipCheckReport(cwd);
   assert.equal(await readFile(join(cwd, 'prepack-ran'), 'utf8').then(() => 'ran').catch(() => 'not-ran'), 'not-ran');
   assert.equal(report.packageName, '@sruthik/agentlink');
-  assert.equal(report.version, '0.1.1');
+  assert.equal(report.version, '0.2.0');
   assert.equal(report.hasFailures, false);
   assert.match(report.launchBoundary, /without explicit Sruthik approval/);
   assert.deepEqual(report.checks.map((check) => check.status), [
-    'ok', 'ok', 'ok', 'ok', 'ok', 'ok', 'ok', 'ok', 'ok', 'ok', 'ok', 'ok', 'ok', 'ok', 'ok', 'ok', 'ok',
+    'ok', 'ok', 'ok', 'ok', 'ok', 'ok', 'ok', 'ok', 'ok', 'ok', 'ok', 'ok', 'ok', 'ok', 'ok', 'ok', 'ok', 'ok',
   ]);
 
   const rendered = renderShipCheckReport(report);
@@ -115,7 +124,7 @@ test('ship check reports package, docs, bins, and build readiness', async (t) =>
   assert.match(rendered, /\[ok\] package files allowlist:/);
   assert.match(rendered, /\[ok\] npm bin executability:/);
   assert.match(rendered, /\[ok\] release notes artifact:/);
-  assert.match(rendered, /\[ok\] installed tarball smoke: installed agentlink 0\.1\.1 and initialized agentlink-mcp from packed tarball/);
+  assert.match(rendered, /\[ok\] installed tarball smoke: installed agentlink 0\.2\.0 and initialized agentlink-mcp from packed tarball/);
   assert.match(rendered, /Result: ready for final verified demo and human launch approval/);
 });
 

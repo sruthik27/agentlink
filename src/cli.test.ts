@@ -7,14 +7,14 @@ import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 import { runCli } from './cli.js';
-import { createConversation, readConversation } from './store.js';
+import { appendMessage, createConversation, readConversation } from './store.js';
 
 const execFileAsync = promisify(execFile);
 const cliPath = fileURLToPath(new URL('./cli.js', import.meta.url));
 
 const fakeMcpServer = `#!/usr/bin/env node
 process.stdin.on('data', () => {
-  const body = JSON.stringify({ jsonrpc: '2.0', id: 1, result: { protocolVersion: '2024-11-05', capabilities: { tools: {} }, serverInfo: { name: 'agentlink-mcp', version: '0.1.1' } } });
+  const body = JSON.stringify({ jsonrpc: '2.0', id: 1, result: { protocolVersion: '2024-11-05', capabilities: { tools: {} }, serverInfo: { name: 'agentlink-mcp', version: '0.2.0' } } });
   process.stdout.write('Content-Length: ' + Buffer.byteLength(body) + '\\r\\n\\r\\n' + body);
 });
 `;
@@ -81,6 +81,29 @@ test('CLI deterministically merges a contract section and preserves status updat
   assert.match(content, /## API Surface\s+- \[x\] Endpoint: `GET \/accounts\/:id\/summary`/);
   assert.doesNotMatch(content, /- \[ \] Request schema:/);
   assert.match(content, /## Status\s+Proposed/);
+});
+
+test('CLI refuses edited compatibility views until explicit refresh', async (t) => {
+  const cwd = await mkdtemp(join(tmpdir(), 'agentlink-cli-refresh-'));
+  t.after(async () => {
+    await rm(cwd, { recursive: true, force: true });
+  });
+  const started = await run(cwd, ['start', '--topic', 'Refresh generated view']);
+  const id = started.match(/Started conversation ([a-zA-Z0-9_-]+):/)?.[1];
+  assert.ok(id);
+  await writeFile(join(cwd, '.agentlink', 'CONTRACT.md'), '# local hand edit\n', 'utf8');
+
+  await assert.rejects(
+    execFileAsync(process.execPath, [cliPath, 'contract', '--conversation', id, '--status', 'Proposed'], { cwd }),
+    (error: unknown) => {
+      const result = error as Error & { code: number; stderr: string };
+      assert.equal(result.code, 1);
+      assert.match(result.stderr, /generated compatibility view was modified/i);
+      return true;
+    },
+  );
+  assert.match(await run(cwd, ['contract', '--conversation', id, '--refresh']), /Contract: Draft/);
+  assert.match(await readFile(join(cwd, '.agentlink', 'CONTRACT.md'), 'utf8'), new RegExp(`agentlink-conversation: ${id}`));
 });
 
 test('CLI rejects invalid contract templates and lists valid names', async (t) => {
@@ -173,7 +196,7 @@ test('CLI setup prints MCP/harness setup guide in markdown and JSON', async (t) 
 
   const markdown = await run(cwd, ['setup', '--harness', 'codex']);
   assert.match(markdown, /# AgentLink Setup Guide/);
-  assert.match(markdown, /- Package: @sruthik\/agentlink 0\.1\.1/);
+  assert.match(markdown, /- Package: @sruthik\/agentlink 0\.2\.0/);
   assert.match(markdown, /### Codex CLI/);
   assert.match(markdown, /codex mcp add agentlink -- agentlink-mcp/);
   assert.doesNotMatch(markdown, /### Claude Code/);
@@ -186,7 +209,7 @@ test('CLI setup prints MCP/harness setup guide in markdown and JSON', async (t) 
     harnesses: string[];
   };
   assert.equal(json.packageName, '@sruthik/agentlink');
-  assert.equal(json.version, '0.1.1');
+  assert.equal(json.version, '0.2.0');
   assert.equal(json.mcpCommand, 'agentlink-mcp');
   assert.deepEqual(json.mcpArgs, []);
   assert.deepEqual(json.harnesses, ['stdio']);
@@ -219,8 +242,8 @@ test('CLI version prints the package version for installed harness checks', asyn
     version: '9.8.7',
   }), 'utf8');
 
-  assert.equal(await run(cwd, ['version']), '0.1.1\n');
-  assert.equal(await run(cwd, ['--version']), '0.1.1\n');
+  assert.equal(await run(cwd, ['version']), '0.2.0\n');
+  assert.equal(await run(cwd, ['--version']), '0.2.0\n');
 });
 
 test('CLI ship-check prints launch readiness in text and JSON', async (t) => {
@@ -230,7 +253,7 @@ test('CLI ship-check prints launch readiness in text and JSON', async (t) => {
   });
   await writeFile(join(cwd, 'package.json'), JSON.stringify({
     name: '@sruthik/agentlink',
-    version: '0.1.1',
+    version: '0.2.0',
     description: 'Local-first coordination bus for coding agents working across repos through durable contracts.',
     license: 'MIT',
     homepage: 'https://github.com/sruthik27/agentlink#readme',
@@ -239,7 +262,7 @@ test('CLI ship-check prints launch readiness in text and JSON', async (t) => {
     engines: { node: '>=20' },
     publishConfig: { access: 'public' },
     bin: { agentlink: './dist/cli.js', 'agentlink-mcp': './dist/mcp/server.js' },
-    files: ['README.md', 'LICENSE', 'CHANGELOG.md', 'release-notes-v0.1.1.md', 'demos/agentlink-demo.gif', 'demos/agentlink-demo.cast', 'dist/**/*.js', 'dist/**/*.d.ts', '!dist/**/*.test.js', '!dist/**/*.test.d.ts'],
+    files: ['README.md', 'LICENSE', 'CHANGELOG.md', 'release-notes-v0.2.0.md', 'demos/agentlink-demo.gif', 'demos/agentlink-demo.cast', 'dist/**/*.js', 'dist/**/*.d.ts', '!dist/**/*.test.js', '!dist/**/*.test.d.ts'],
     scripts: { agentlink: 'node dist/cli.js', build: 'tsc', test: 'node --test' },
     keywords: ['mcp', 'tmux', 'multi-agent'],
   }), 'utf8');
@@ -255,17 +278,26 @@ test('CLI ship-check prints launch readiness in text and JSON', async (t) => {
     'npm run agentlink -- ship-check',
     'npm run agentlink -- demo --peer ../peer-repo',
     'npm run agentlink -- replay',
+    'agentlink register --label test',
+    'agentlink wait --conversation id --after cursor',
+    'agentlink notify trust',
+    'agentlink wake enroll',
+    'agentlink wake run',
+    'stable participant presence can expire',
+    'bounded wait uses user trust with a supervised/headless Codex recipient',
+    'Migration from 0.1.1',
+    '.agentlink/*',
     'npm run agentlink -- version',
     'npm run agentlink -- launch-brief',
     'node dist/mcp/server.js',
     '![AgentLink terminal demo](demos/agentlink-demo.gif)',
     'asciinema play demos/agentlink-demo.cast',
-    'release-notes-v0.1.1.md',
+    'release-notes-v0.2.0.md',
   ].join('\n'), 'utf8');
   await writeFile(join(cwd, 'LICENSE'), 'MIT\n', 'utf8');
   await writeFile(join(cwd, 'CHANGELOG.md'), '# Changelog\n', 'utf8');
-  await writeFile(join(cwd, 'release-notes-v0.1.1.md'), [
-    '## AgentLink 0.1.1',
+  await writeFile(join(cwd, 'release-notes-v0.2.0.md'), [
+    '## AgentLink 0.2.0',
     '### Verification before release',
     'Local tests passed.',
     '### Known limitation',
@@ -275,7 +307,7 @@ test('CLI ship-check prints launch readiness in text and JSON', async (t) => {
   await mkdir(join(cwd, 'dist', 'mcp'), { recursive: true });
   await writeFile(join(cwd, 'demos', 'agentlink-demo.gif'), validGif);
   await writeFile(join(cwd, 'demos', 'agentlink-demo.cast'), validCast, 'utf8');
-  await writeFile(join(cwd, 'dist', 'cli.js'), '#!/usr/bin/env node\nconsole.log(\'0.1.1\');\n', 'utf8');
+  await writeFile(join(cwd, 'dist', 'cli.js'), '#!/usr/bin/env node\nconsole.log(\'0.2.0\');\n', 'utf8');
   await writeFile(join(cwd, 'dist', 'mcp', 'server.js'), fakeMcpServer, 'utf8');
   await chmod(join(cwd, 'dist', 'cli.js'), 0o755);
   await chmod(join(cwd, 'dist', 'mcp', 'server.js'), 0o755);
@@ -284,7 +316,7 @@ test('CLI ship-check prints launch readiness in text and JSON', async (t) => {
   assert.match(text, /AgentLink Ship Check/);
   assert.match(text, /\[ok\] npm pack dry-run:/);
   assert.match(text, /\[ok\] npm bin executability:/);
-  assert.match(text, /\[ok\] installed tarball smoke: installed agentlink 0\.1\.1 and initialized agentlink-mcp from packed tarball/);
+  assert.match(text, /\[ok\] installed tarball smoke: installed agentlink 0\.2\.0 and initialized agentlink-mcp from packed tarball/);
   assert.match(text, /Launch boundary: Do not npm publish/);
   assert.match(text, /Result: ready for final verified demo and human launch approval/);
 
@@ -305,7 +337,7 @@ test('CLI launch-brief prints final approval brief in markdown and JSON', async 
   });
   await writeFile(join(cwd, 'package.json'), JSON.stringify({
     name: '@sruthik/agentlink',
-    version: '0.1.1',
+    version: '0.2.0',
   }), 'utf8');
 
   const markdown = await run(cwd, ['launch-brief']);
@@ -354,10 +386,9 @@ test('CLI demo runs a deterministic two-repo contract negotiation smoke', async 
   assert.match(localContract, /## Status\s+Accepted/);
 
   const replay = await run(local, ['replay', '--conversation', result.conversationId]);
-  assert.match(replay, /message assistant\/producer-agent: Proposal:/);
-  assert.match(replay, /message assistant\/consumer-agent: Accepted if expiresAt/);
-  assert.match(replay, /approval from producer-agent/);
-  assert.match(replay, /approval from consumer-agent/);
+  assert.match(replay, /message assistant\/.*: Proposal:/);
+  assert.match(replay, /message assistant\/.*: Accepted if expiresAt/);
+  assert.equal((replay.match(/approval from .* for revision/g) ?? []).length, 2);
   assert.match(replay, /status: closed/);
 });
 
@@ -383,8 +414,6 @@ test('CLI runs the init/start/send/read/status/end lifecycle', async (t) => {
       'send',
       '--role',
       'assistant',
-      '--from',
-      'web-agent',
       '--body',
       'Please add expiresAt.',
     ]),
@@ -393,7 +422,7 @@ test('CLI runs the init/start/send/read/status/end lifecycle', async (t) => {
 
   const read = await run(cwd, ['read', '--conversation', id]);
   assert.match(read, new RegExp(`Conversation ${id} \\[open\\]`));
-  assert.match(read, /assistant\/web-agent: Please add expiresAt\./);
+  assert.match(read, /assistant\/.*: Please add expiresAt\./);
 
   const status = await run(cwd, ['status']);
   assert.match(status, new RegExp(`${id} \\[open\\] OAuth contract change -> api-agent \\(1 messages\\)`));
@@ -403,15 +432,15 @@ test('CLI runs the init/start/send/read/status/end lifecycle', async (t) => {
   assert.match(updatedContract, /Contract: Accepted/);
   assert.match(updatedContract, new RegExp(`Conversation: ${id}`));
 
-  assert.match(await run(cwd, ['approve', '--from', 'web-agent']), new RegExp(`Approval recorded for ${id} from web-agent`));
-  assert.match(await run(cwd, ['end']), new RegExp(`Closed conversation ${id}`));
+  assert.match(await run(cwd, ['approve']), new RegExp(`Approval recorded for ${id} from`));
+  assert.match(await run(cwd, ['end', '--conversation', id]), new RegExp(`Closed conversation ${id}`));
   assert.match(await run(cwd, ['read', id]), new RegExp(`Conversation ${id} \\[closed\\]`));
 
   const replay = await run(cwd, ['replay', id]);
   assert.match(replay, new RegExp(`Conversation ${id} \\[closed\\]: OAuth contract change`));
   assert.match(replay, /conversation started: OAuth contract change -> api-agent/);
-  assert.match(replay, /message assistant\/web-agent: Please add expiresAt\./);
-  assert.match(replay, /approval from web-agent/);
+  assert.match(replay, /message assistant\/.*: Please add expiresAt\./);
+  assert.match(replay, /approval from .* for revision/);
   assert.match(replay, /status: closed/);
 
   const replayJson = JSON.parse(await run(cwd, ['replay', '--conversation', id, '--format', 'json'])) as {
@@ -478,13 +507,19 @@ test('CLI enforces max rounds and approval gates before Accepted', async (t) => 
   assert.match(started, /Max rounds: 1/);
   assert.match(started, /Required approvals: 2/);
 
+  const ownerId = (await run(cwd, ['actor', 'show'])).match(/^([a-zA-Z0-9_-]+)/)?.[1];
+  assert.ok(ownerId);
+  const reviewerId = (await run(cwd, ['actor', 'add', '--name', 'reviewer'])).match(/selected: ([a-zA-Z0-9_-]+)/)?.[1];
+  assert.ok(reviewerId);
+  assert.match(await run(cwd, ['join', '--conversation', id]), /joined conversation/);
+
   assert.match(await run(cwd, ['send', '--body', 'Proposal v1']), new RegExp(`Message appended to ${id}`));
   await assert.rejects(
     execFileAsync(process.execPath, [cliPath, 'send', '--body', 'Proposal v2'], { cwd }),
     (error: unknown) => {
       const result = error as Error & { code: number; stderr: string };
       assert.equal(result.code, 1);
-      assert.match(result.stderr, /reached its max round limit \(1\)/);
+      assert.match(result.stderr, /reached its message cap \(1\)/);
       return true;
     },
   );
@@ -493,18 +528,19 @@ test('CLI enforces max rounds and approval gates before Accepted', async (t) => 
     execFileAsync(process.execPath, [cliPath, 'contract', '--status', 'Accepted'], { cwd }),
     (error: unknown) => {
       const result = error as Error & { code: number; stderr: string };
-      assert.equal(result.code, 2);
-      assert.match(result.stderr, /Cannot mark Accepted: conversation .* has 0\/2 required approvals/);
+      assert.equal(result.code, 1);
+      assert.match(result.stderr, /Cannot mark Accepted: conversation .* has 0\/2 approvals for revision/);
       return true;
     },
   );
 
-  assert.match(await run(cwd, ['approve', '--from', 'producer-agent']), /1\/2/);
-  assert.match(await run(cwd, ['approve', '--from', 'consumer-agent']), /2\/2/);
+  assert.match(await run(cwd, ['approve']), /1\/2/);
+  await run(cwd, ['actor', 'use', '--id', ownerId]);
+  assert.match(await run(cwd, ['approve']), /2\/2/);
   assert.match(await run(cwd, ['contract', '--status', 'Accepted']), /Contract: Accepted/);
 
   const status = await run(cwd, ['status']);
-  assert.match(status, /1 messages, max 1 rounds, approvals 2\/2/);
+  assert.match(status, /1 messages, message cap 1, approvals 2\/2/);
 });
 
 
@@ -533,14 +569,13 @@ test('CLI appends before delivery and preserves the message when tmux delivery f
         assert.equal(input.paneId, '%9');
         const delivered = JSON.parse(input.text) as Record<string, unknown>;
         assert.equal(typeof delivered.timestamp, 'string');
-        assert.deepEqual({ ...delivered, timestamp: '<timestamp>' }, {
-          conversationId: 'conversation-1',
-          type: 'message',
-          role: 'user',
-          from: 'human',
-          body: 'Please add expiresAt.',
-          timestamp: '<timestamp>',
-        });
+        assert.equal(delivered.conversationId, 'conversation-1');
+        assert.equal(delivered.type, 'message');
+        assert.equal(delivered.role, 'user');
+        assert.equal(delivered.body, 'Please add expiresAt.');
+        assert.equal(typeof delivered.from, 'string');
+        assert.equal(typeof delivered.participantId, 'string');
+        assert.equal(typeof delivered.workspaceId, 'string');
         const conversation = await readConversation(cwd, 'conversation-1');
         messageWasStoredBeforeDelivery = conversation.messages.length === 1;
         throw new Error('target pane is unavailable');
@@ -553,6 +588,76 @@ test('CLI appends before delivery and preserves the message when tmux delivery f
   assert.equal(messageWasStoredBeforeDelivery, true);
   assert.equal(conversation.messages.length, 1);
   assert.equal(conversation.messages[0].body, 'Please add expiresAt.');
-  assert.match(logs[0], /Message appended to conversation-1/);
+  assert.match(logs[0], /Persisted message .* in conversation-1/);
   assert.equal(logs.some((line) => line.includes('Message delivered')), false);
+});
+
+test('CLI requires safe targets and exposes cursor, ack, message metadata, and owner cap controls', async (t) => {
+  const cwd = await mkdtemp(join(tmpdir(), 'agentlink-cli-reliability-'));
+  t.after(async () => {
+    await rm(cwd, { recursive: true, force: true });
+  });
+  const firstStart = await run(cwd, ['start', '--topic', 'First', '--max-messages', '2']);
+  const firstId = firstStart.match(/Started conversation ([a-zA-Z0-9_-]+):/)?.[1];
+  assert.ok(firstId);
+  const secondStart = await run(cwd, ['start', '--topic', 'Second']);
+  const secondId = secondStart.match(/Started conversation ([a-zA-Z0-9_-]+):/)?.[1];
+  assert.ok(secondId);
+
+  await assert.rejects(
+    execFileAsync(process.execPath, [cliPath, 'send', '--body', 'ambiguous'], { cwd }),
+    (error: unknown) => {
+      const result = error as Error & { stderr: string };
+      assert.match(result.stderr, new RegExp(`ambiguous.*${firstId}.*${secondId}|ambiguous.*${secondId}.*${firstId}`, 'is'));
+      return true;
+    },
+  );
+  await assert.rejects(
+    execFileAsync(process.execPath, [cliPath, 'end'], { cwd }),
+    /Command failed/,
+  );
+
+  const sent = await run(cwd, [
+    'send', '--conversation', firstId, '--body', 'question body', '--kind', 'question', '--refs', 'commit:abcdef1,pr:#7',
+  ]);
+  const messageId = sent.match(/Persisted message (msg_[a-zA-Z0-9_-]+)/)?.[1];
+  assert.ok(messageId);
+  const read = await run(cwd, ['read', '--conversation', firstId, '--limit', '1']);
+  assert.match(read, /kind=question/);
+  assert.match(read, /Next cursor: /);
+  assert.match(read, /Unread: 1/);
+  assert.match(await run(cwd, ['ack', '--conversation', firstId, '--message-id', messageId]), /Acknowledged through/);
+  assert.match(await run(cwd, ['read', '--conversation', firstId]), /Unread: 0/);
+  assert.match(await run(cwd, ['cap', '--conversation', firstId, '--set', '4']), /Message cap: 4/);
+  assert.match(await run(cwd, ['cap', '--conversation', firstId, '--remove']), /Message cap removed/);
+});
+
+test('CLI help and registry-first workflow expose bounded wait without requiring tmux', async (t) => {
+  const cwd = await mkdtemp(join(tmpdir(), 'agentlink-cli-registry-wait-'));
+  t.after(async () => rm(cwd, { recursive: true, force: true }));
+
+  const helpText = await run(cwd, ['help']);
+  assert.match(helpText, /agentlink register --label/);
+  assert.match(helpText, /agentlink wait --conversation/);
+  assert.match(helpText, /agentlink notify trust/);
+  assert.match(helpText, /agentlink wake enroll/);
+
+  const registered = await run(cwd, ['register', '--label', 'test-codex', '--client', 'codex', '--ttl', '60', '--id', 'reg_cli']);
+  assert.match(registered, /Agent registered: reg_cli/);
+  assert.match(await run(cwd, ['list']), /reg_cli test-codex \[codex\]/);
+  assert.match(await run(cwd, ['heartbeat', '--registration', 'reg_cli', '--ttl', '60']), /Heartbeat renewed: reg_cli/);
+
+  const started = await run(cwd, ['start', '--topic', 'CLI wait']);
+  const conversationId = started.match(/Started conversation ([a-zA-Z0-9_-]+):/)?.[1];
+  assert.ok(conversationId);
+  const read = await run(cwd, ['read', '--conversation', conversationId]);
+  const cursor = read.match(/Next cursor: (\S+)/)?.[1];
+  assert.ok(cursor);
+  setTimeout(() => {
+    void appendMessage(cwd, conversationId, { role: 'assistant', body: 'wake bounded CLI wait' });
+  }, 75);
+  const waited = await run(cwd, ['wait', '--conversation', conversationId, '--after', cursor, '--timeout-ms', '1000']);
+  assert.match(waited, /Wait outcome: message/);
+  assert.match(waited, /wake bounded CLI wait/);
+  assert.match(await run(cwd, ['unregister', '--registration', 'reg_cli']), /Agent unregistered: reg_cli/);
 });

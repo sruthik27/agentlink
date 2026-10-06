@@ -13,6 +13,7 @@ import {
   readConversation,
   resolveConversation,
 } from './store.js';
+import { writeConversationContract } from './contract.js';
 
 async function temporaryWorkspace(t: test.TestContext): Promise<string> {
   const directory = await mkdtemp(join(tmpdir(), 'agentlink-store-'));
@@ -34,7 +35,6 @@ test('conversation store appends messages and status changes as JSONL', async (t
   assert.equal(conversation.status, 'open');
   await appendMessage(cwd, conversation.id, {
     role: 'assistant',
-    from: 'api-agent',
     body: 'I propose adding expiresAt.',
     timestamp: '2026-07-25T08:01:00.000Z',
   });
@@ -42,13 +42,11 @@ test('conversation store appends messages and status changes as JSONL', async (t
 
   assert.equal(closed.status, 'closed');
   assert.equal(closed.messages.length, 1);
-  assert.deepEqual(closed.messages[0], {
-    type: 'message',
-    role: 'assistant',
-    from: 'api-agent',
-    body: 'I propose adding expiresAt.',
-    timestamp: '2026-07-25T08:01:00.000Z',
-  });
+  assert.equal(closed.messages[0]?.type, 'message');
+  assert.equal(closed.messages[0]?.role, 'assistant');
+  assert.equal(closed.messages[0]?.body, 'I propose adding expiresAt.');
+  assert.equal(closed.messages[0]?.timestamp, '2026-07-25T08:01:00.000Z');
+  assert.ok(closed.messages[0]?.participantId);
 
   const lines = (await readFile(conversationPath(cwd, conversation.id), 'utf8')).trim().split('\n');
   assert.equal(lines.length, 3);
@@ -56,14 +54,13 @@ test('conversation store appends messages and status changes as JSONL', async (t
   await assert.rejects(
     appendMessage(cwd, conversation.id, {
       role: 'user',
-      from: 'human',
       body: 'Too late',
     }),
     /is closed/,
   );
 });
 
-test('listing and default resolution choose the latest open conversation', async (t) => {
+test('listing reports activity and implicit resolution accepts the sole open conversation', async (t) => {
   const cwd = await temporaryWorkspace(t);
   await createConversation(cwd, {
     id: 'older',
@@ -87,42 +84,41 @@ test('listing and default resolution choose the latest open conversation', async
 });
 
 
-test('conversation gates enforce max rounds and record unique approvals', async (t) => {
+test('maxRounds compatibility alias enforces a message cap and approvals stay unique', async (t) => {
   const cwd = await temporaryWorkspace(t);
   await createConversation(cwd, {
     id: 'gated-conversation',
     topic: 'Bounded negotiation',
     maxRounds: 1,
-    requiredApprovals: 2,
+    requiredApprovals: 1,
     createdAt: '2026-07-29T08:00:00.000Z',
   });
+  await writeConversationContract(cwd, { conversationId: 'gated-conversation', topic: 'Bounded negotiation' });
 
   await appendMessage(cwd, 'gated-conversation', {
     role: 'assistant',
-    from: 'producer-agent',
     body: 'Proposal v1',
     timestamp: '2026-07-29T08:01:00.000Z',
   });
   await assert.rejects(
     appendMessage(cwd, 'gated-conversation', {
       role: 'assistant',
-      from: 'consumer-agent',
       body: 'Proposal v2',
     }),
-    /reached its max round limit \(1\)/,
+    /reached its message cap \(1\)/,
   );
 
   await approveConversation(cwd, 'gated-conversation', {
-    from: 'producer-agent',
     timestamp: '2026-07-29T08:02:00.000Z',
   });
   await assert.rejects(
-    approveConversation(cwd, 'gated-conversation', { from: 'producer-agent' }),
-    /already has approval from producer-agent/,
+    approveConversation(cwd, 'gated-conversation'),
+    /already approved revision/,
   );
 
   const conversation = await readConversation(cwd, 'gated-conversation');
   assert.equal(conversation.maxRounds, 1);
-  assert.equal(conversation.requiredApprovals, 2);
-  assert.deepEqual(conversation.approvals.map((approval) => approval.from), ['producer-agent']);
+  assert.equal(conversation.requiredApprovals, 1);
+  assert.equal(conversation.approvals.length, 1);
+  assert.ok(conversation.approvals[0]?.participantId);
 });
