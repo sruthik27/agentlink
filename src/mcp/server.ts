@@ -9,6 +9,7 @@ stdout.on('error', (error: NodeJS.ErrnoException) => {
 import { dirname, join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { AGENTLINK_MCP_TOOLS, callAgentLinkTool } from './tools.js';
+import { initializeWorkspaceIdentity, resolveActiveParticipant } from '../workspace.js';
 
 type JsonRpcId = string | number | null;
 
@@ -22,6 +23,11 @@ interface JsonRpcRequest {
 type StdioOutputMode = 'content-length' | 'jsonl';
 
 let outputMode: StdioOutputMode = 'content-length';
+const activeRequests = new Map<string, AbortController>();
+
+function requestKey(id: JsonRpcId | undefined): string | undefined {
+  return id === undefined ? undefined : JSON.stringify(id);
+}
 
 function encodeContentLengthMessage(message: unknown): Buffer {
   const body = Buffer.from(JSON.stringify(message), 'utf8');
@@ -66,6 +72,15 @@ async function readPackageVersion(): Promise<string> {
 }
 
 async function handleRequest(request: JsonRpcRequest): Promise<void> {
+  if (request.method === 'notifications/cancelled') {
+    const cancelledId = request.params?.requestId as JsonRpcId | undefined;
+    const key = requestKey(cancelledId);
+    if (key) activeRequests.get(key)?.abort();
+    return;
+  }
+  const key = requestKey(request.id);
+  const controller = key ? new AbortController() : undefined;
+  if (key && controller) activeRequests.set(key, controller);
   try {
     if (request.method === 'initialize') {
       sendResult(request.id, {
@@ -89,7 +104,7 @@ async function handleRequest(request: JsonRpcRequest): Promise<void> {
       if (args !== undefined && (typeof args !== 'object' || args === null || Array.isArray(args))) {
         throw new Error('tools/call params.arguments must be an object');
       }
-      sendResult(request.id, await callAgentLinkTool(toolName, args as Record<string, unknown> | undefined));
+      sendResult(request.id, await callAgentLinkTool(toolName, args as Record<string, unknown> | undefined, process.cwd(), { signal: controller?.signal }));
       return;
     }
 
@@ -97,7 +112,9 @@ async function handleRequest(request: JsonRpcRequest): Promise<void> {
 
     sendError(request.id, -32601, `Method not found: ${request.method}`);
   } catch (error) {
-    sendError(request.id, -32000, error instanceof Error ? error.message : String(error));
+    sendError(request.id, error instanceof Error && error.name === 'AbortError' ? -32800 : -32000, error instanceof Error ? error.message : String(error));
+  } finally {
+    if (key && activeRequests.get(key) === controller) activeRequests.delete(key);
   }
 }
 
@@ -118,11 +135,14 @@ function tryReadJsonLine(buffer: Buffer): { body: string; nextOffset: number } |
 }
 
 export async function serveStdio(): Promise<void> {
+  await initializeWorkspaceIdentity(process.cwd());
+  const startupActor = await resolveActiveParticipant(process.cwd());
+  process.env.AGENTLINK_PARTICIPANT_ID = startupActor.participantId;
   let buffer = Buffer.alloc(0);
 
   stdin.on('data', (chunk: Buffer) => {
     buffer = Buffer.concat([buffer, chunk]);
-    void (async () => {
+    try {
       while (buffer.length > 0) {
         const trimmedStart = buffer.toString('utf8', 0, Math.min(buffer.length, 32)).trimStart();
         if (trimmedStart.startsWith('{')) {
@@ -131,7 +151,7 @@ export async function serveStdio(): Promise<void> {
           outputMode = 'jsonl';
           buffer = buffer.subarray(line.nextOffset);
           if (!line.body) continue;
-          await handleRequest(JSON.parse(line.body) as JsonRpcRequest);
+          void handleRequest(JSON.parse(line.body) as JsonRpcRequest);
           continue;
         }
 
@@ -142,9 +162,11 @@ export async function serveStdio(): Promise<void> {
         if (buffer.length < totalLength) return;
         const body = buffer.subarray(frame.bodyOffset, totalLength).toString('utf8');
         buffer = buffer.subarray(totalLength);
-        await handleRequest(JSON.parse(body) as JsonRpcRequest);
+        void handleRequest(JSON.parse(body) as JsonRpcRequest);
       }
-    })().catch((error) => sendError(null, -32700, error instanceof Error ? error.message : String(error)));
+    } catch (error) {
+      sendError(null, -32700, error instanceof Error ? error.message : String(error));
+    }
   });
 }
 

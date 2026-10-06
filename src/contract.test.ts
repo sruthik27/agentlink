@@ -17,6 +17,7 @@ import {
   updateContractStatus,
   writeConversationContract,
 } from './contract.js';
+import { createConversation } from './store.js';
 
 async function temporaryWorkspace(t: test.TestContext): Promise<string> {
   const directory = await mkdtemp(join(tmpdir(), 'agentlink-contract-'));
@@ -28,6 +29,7 @@ async function temporaryWorkspace(t: test.TestContext): Promise<string> {
 
 test('contract template carries conversation context and exposes its state', async (t) => {
   const cwd = await temporaryWorkspace(t);
+  await createConversation(cwd, { id: 'conversation-1', topic: 'OAuth contract change' });
   const path = await writeConversationContract(cwd, {
     conversationId: 'conversation-1',
     topic: 'OAuth contract change',
@@ -39,11 +41,11 @@ test('contract template carries conversation context and exposes its state', asy
   assert.match(content, /## Participants\s+- Local workspace\s+- api-agent/);
   assert.equal(parseContractStatus(content), 'Draft');
   assert.equal(parseContractConversationId(content), 'conversation-1');
-  assert.deepEqual(await readContractState(cwd), {
-    path,
-    status: 'Draft',
-    conversationId: 'conversation-1',
-  });
+  const initial = await readContractState(cwd);
+  assert.equal(initial.path, path);
+  assert.equal(initial.status, 'Draft');
+  assert.equal(initial.conversationId, 'conversation-1');
+  assert.match(initial.revision ?? '', /^[a-f0-9]{64}$/);
 
   assert.equal((await updateContractStatus(cwd, 'Accepted')).status, 'Accepted');
   assert.equal(parseContractStatus(await readFile(path, 'utf8')), 'Accepted');
@@ -88,6 +90,7 @@ test('contract templates render focused deterministic negotiation checklists', (
 
 test('contract section merge replaces existing sections and inserts missing sections before status', async (t) => {
   const cwd = await temporaryWorkspace(t);
+  await createConversation(cwd, { id: 'conversation-1', topic: 'Producer API shape' });
   const path = await writeConversationContract(cwd, {
     conversationId: 'conversation-1',
     topic: 'Producer API shape',
@@ -108,11 +111,9 @@ test('contract section merge replaces existing sections and inserts missing sect
   ]);
   const content = await readFile(path, 'utf8');
 
-  assert.deepEqual(state, {
-    path,
-    status: 'Proposed',
-    conversationId: 'conversation-1',
-  });
+  assert.equal(state.path, path);
+  assert.equal(state.status, 'Proposed');
+  assert.equal(state.conversationId, 'conversation-1');
   assert.match(content, /agentlink-conversation: conversation-1/);
   assert.match(content, /## API Surface\s+- \[x\] Endpoint: `GET \/accounts\/:id\/summary`/);
   assert.doesNotMatch(content, /- \[ \] Request schema:/);
@@ -139,6 +140,7 @@ test('contract initialization is idempotent and does not overwrite existing work
 test('contract can be synced into another repo workspace', async (t) => {
   const source = await temporaryWorkspace(t);
   const target = await temporaryWorkspace(t);
+  await createConversation(source, { id: 'conversation-1', topic: 'Producer API shape' });
   const sourcePath = await writeConversationContract(source, {
     conversationId: 'conversation-1',
     topic: 'Producer API shape',
@@ -150,9 +152,9 @@ test('contract can be synced into another repo workspace', async (t) => {
 
   assert.equal(targetPath, contractPath(target));
   assert.equal(await readFile(targetPath, 'utf8'), await readFile(sourcePath, 'utf8'));
-  assert.deepEqual(await readContractState(target), {
-    path: targetPath,
-    status: 'Proposed',
-    conversationId: 'conversation-1',
-  });
+  const targetState = await readContractState(target);
+  assert.equal(await readFile(targetState.compatibilityPath, 'utf8'), await readFile(targetPath, 'utf8'));
+  assert.equal(targetState.status, 'Proposed');
+  assert.equal(targetState.conversationId, 'conversation-1');
+  assert.notEqual(targetState.path, targetPath);
 });

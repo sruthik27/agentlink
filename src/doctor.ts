@@ -3,7 +3,8 @@ import { dirname, join, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { readContractState } from './contract.js';
 import { filterAgentPanes, listTmuxPanes, type TmuxPane } from './tmux.js';
-import { AGENTLINK_DIRECTORY, CONVERSATIONS_DIRECTORY, listConversations } from './store.js';
+import { AGENTLINK_DIRECTORY, listConversations } from './store.js';
+import { listAgentRegistrations } from './workspace.js';
 
 export type DoctorCheckStatus = 'ok' | 'warn' | 'fail';
 
@@ -96,9 +97,9 @@ export async function collectDoctorReport(
   }
 
   const workspace = join(cwd, AGENTLINK_DIRECTORY);
-  const conversations = join(workspace, CONVERSATIONS_DIRECTORY);
+  const association = join(workspace, 'association.json');
   checks.push(
-    await pathExists(conversations)
+    await pathExists(association)
       ? check('ok', 'workspace', formatRelative(cwd, workspace))
       : check('warn', 'workspace', 'not initialized; run `agentlink init`'),
   );
@@ -118,15 +119,26 @@ export async function collectDoctorReport(
   }
 
   try {
+    const registrations = await listAgentRegistrations(cwd);
+    checks.push(
+      registrations.length > 0
+        ? check('ok', 'agent registry', `${registrations.length} active explicit registration(s)`)
+        : check('warn', 'agent registry', 'no active registrations; run `agentlink register --label <name>` in each peer'),
+    );
+  } catch (error) {
+    checks.push(check('warn', 'agent registry', error instanceof Error ? error.message : String(error)));
+  }
+
+  try {
     const panes = await paneLister();
     const agents = filterAgentPanes(panes);
     checks.push(
       agents.length > 0
-        ? check('ok', 'tmux agents', `${agents.length} active coding-agent pane(s)`)
-        : check('warn', 'tmux agents', 'no active coding-agent panes found'),
+        ? check('ok', 'tmux (optional)', `${agents.length} active coding-agent pane(s)`)
+        : check('warn', 'tmux (optional)', 'unavailable or no active coding-agent panes; core workflow is unaffected'),
     );
   } catch (error) {
-    checks.push(check('warn', 'tmux agents', error instanceof Error ? error.message : String(error)));
+    checks.push(check('warn', 'tmux (optional)', `${error instanceof Error ? error.message : String(error)}; core workflow is unaffected`));
   }
 
   const mcpBuildPath = installedMcpServerPath();

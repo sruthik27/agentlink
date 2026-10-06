@@ -32,7 +32,7 @@ function releaseNotesFileName(version: string | undefined): string {
   const normalized = version?.trim();
   return normalized && /^\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?$/.test(normalized)
     ? `release-notes-v${normalized}.md`
-    : 'release-notes-v0.1.1.md';
+    : 'release-notes-v0.2.0.md';
 }
 
 export async function collectLaunchBrief(cwd = process.cwd()): Promise<LaunchBrief> {

@@ -1,6 +1,7 @@
 import { basename, resolve } from 'node:path';
-import { appendMessage, approveConversation, closeConversation, createConversation, ensureWorkspace } from './store.js';
+import { appendMessage, approveConversation, closeConversation, createConversation, ensureWorkspace, joinConversation } from './store.js';
 import { contractPath, syncContractToWorkspace, updateContractSections, updateContractStatus, writeConversationContract } from './contract.js';
+import { associateWorkspace, registerAgent } from './workspace.js';
 
 export interface DemoInput {
   topic?: string;
@@ -19,6 +20,7 @@ export interface DemoResult {
   status: 'Accepted';
   messages: number;
   approvals: number;
+  registrations: number;
 }
 
 function assertPeerPath(value: string): string {
@@ -31,7 +33,7 @@ export async function runDemo(cwd = process.cwd(), input: DemoInput): Promise<De
   const localPath = resolve(cwd);
   const peerPath = assertPeerPath(input.peerPath);
   const topic = input.topic?.trim() || 'Demo API contract: account summary endpoint';
-  const maxRounds = input.maxRounds ?? 6;
+  const maxMessages = input.maxRounds ?? 6;
   const requiredApprovals = input.requiredApprovals ?? 2;
   const peerName = basename(peerPath) || peerPath;
 
@@ -41,7 +43,7 @@ export async function runDemo(cwd = process.cwd(), input: DemoInput): Promise<De
   const conversation = await createConversation(localPath, {
     topic,
     target: peerName,
-    maxRounds,
+    maxMessages,
     requiredApprovals,
   });
 
@@ -52,9 +54,13 @@ export async function runDemo(cwd = process.cwd(), input: DemoInput): Promise<De
     template: 'api-change',
   });
 
+  await associateWorkspace(localPath, peerPath, { conversationId: conversation.id });
+  await joinConversation(peerPath, conversation.id);
+  await registerAgent(localPath, { label: 'demo-owner-agent', clientKind: 'demo', ttlSeconds: 300 });
+  await registerAgent(peerPath, { label: 'demo-peer-agent', clientKind: 'demo', ttlSeconds: 300 });
+
   await appendMessage(localPath, conversation.id, {
     role: 'assistant',
-    from: 'producer-agent',
     body: 'Proposal: add GET /accounts/:id/summary returning { id, balance, currency, expiresAt }.',
   });
   await updateContractSections(localPath, [{
@@ -67,9 +73,8 @@ export async function runDemo(cwd = process.cwd(), input: DemoInput): Promise<De
     ].join('\n'),
   }]);
 
-  await appendMessage(localPath, conversation.id, {
+  await appendMessage(peerPath, conversation.id, {
     role: 'assistant',
-    from: 'consumer-agent',
     body: 'Accepted if expiresAt is ISO-8601 UTC and 404 remains non-retryable.',
   });
   await updateContractSections(localPath, [{
@@ -81,8 +86,8 @@ export async function runDemo(cwd = process.cwd(), input: DemoInput): Promise<De
     ].join('\n'),
   }]);
 
-  await approveConversation(localPath, conversation.id, { from: 'producer-agent' });
-  await approveConversation(localPath, conversation.id, { from: 'consumer-agent' });
+  await approveConversation(localPath, conversation.id);
+  await approveConversation(peerPath, conversation.id);
   await updateContractStatus(localPath, 'Accepted');
   await closeConversation(localPath, conversation.id);
   const peerContractPath = await syncContractToWorkspace(localPath, peerPath);
@@ -97,6 +102,7 @@ export async function runDemo(cwd = process.cwd(), input: DemoInput): Promise<De
     status: 'Accepted',
     messages: 2,
     approvals: requiredApprovals,
+    registrations: 2,
   };
 }
 
@@ -113,6 +119,7 @@ export function renderDemoMarkdown(result: DemoResult): string {
     `- Peer contract: ${result.peerContractPath}`,
     `- Messages: ${result.messages}`,
     `- Approvals: ${result.approvals}`,
+    `- Active explicit registrations: ${result.registrations}`,
     '',
     'Next: run `agentlink replay --conversation ' + result.conversationId + '` in the local repo to inspect the append-only negotiation timeline.',
   ].join('\n');

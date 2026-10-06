@@ -16,20 +16,26 @@ test('setup guide renders deterministic local MCP and harness instructions', asy
   });
   await writeFile(join(cwd, 'package.json'), JSON.stringify({
     name: '@sruthik/agentlink',
-    version: '0.1.1',
+    version: '0.2.0',
   }), 'utf8');
 
   const guide = await collectSetupGuide(cwd, 'claude-code');
   assert.equal(guide.packageName, '@sruthik/agentlink');
-  assert.equal(guide.version, '0.1.1');
+  assert.equal(guide.version, '0.2.0');
   assert.equal(guide.mcpCommand, 'agentlink-mcp');
   assert.deepEqual(guide.mcpArgs, []);
   assert.deepEqual(guide.harnesses, ['claude-code']);
   assert.match(guide.agentPrompt, /Keep repo source isolated/);
+  assert.match(guide.processingSemantics.join(' '), /bounded to 30 seconds/);
+  assert.match(guide.notificationBoundary.join(' '), /supervised\/headless Codex runner/);
 
   const markdown = renderSetupGuideMarkdown(guide);
   assert.match(markdown, /# AgentLink Setup Guide/);
   assert.match(markdown, /claude mcp add -s user agentlink -- agentlink-mcp/);
+  assert.match(markdown, /agentlink register --label owner-codex/);
+  assert.match(markdown, /agentlink wait --conversation/);
+  assert.match(markdown, /agentlink notify trust/);
+  assert.match(markdown, /agentlink wake enroll/);
   assert.doesNotMatch(markdown, /### Codex CLI/);
 });
 

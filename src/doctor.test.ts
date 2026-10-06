@@ -6,6 +6,7 @@ import { join } from 'node:path';
 import { collectDoctorReport, renderDoctorReport } from './doctor.js';
 import { initializeContract } from './contract.js';
 import { ensureWorkspace } from './store.js';
+import { registerAgent } from './workspace.js';
 
 function fakePane() {
   return {
@@ -34,6 +35,7 @@ test('doctor reports a ready workspace and active agent panes without hard failu
   }), 'utf8');
   await ensureWorkspace(cwd);
   await initializeContract(cwd);
+  await registerAgent(cwd, { label: 'doctor-test', registrationId: 'reg_doctor' });
   await mkdir(join(cwd, 'dist', 'mcp'), { recursive: true });
   await writeFile(join(cwd, 'dist', 'mcp', 'server.js'), '', 'utf8');
 
@@ -46,14 +48,15 @@ test('doctor reports a ready workspace and active agent panes without hard failu
     ['ok', 'workspace'],
     ['ok', 'contract'],
     ['ok', 'conversation store'],
-    ['ok', 'tmux agents'],
+    ['ok', 'agent registry'],
+    ['ok', 'tmux (optional)'],
     ['ok', 'MCP build artifact'],
   ]);
 
   const rendered = renderDoctorReport(report);
   assert.match(rendered, /AgentLink Doctor/);
   assert.match(rendered, /\[ok\] Node\.js: v20\.0\.0 \(>=20\)/);
-  assert.match(rendered, /\[ok\] tmux agents: 1 active coding-agent pane\(s\)/);
+  assert.match(rendered, /\[ok\] tmux \(optional\): 1 active coding-agent pane\(s\)/);
   assert.match(rendered, /Result: ready with no hard failures\./);
 });
 
@@ -73,6 +76,7 @@ test('doctor distinguishes hard failures from non-blocking local warnings', asyn
   assert.equal(report.checks.find((item) => item.label === 'Node.js')?.status, 'fail');
   assert.equal(report.checks.find((item) => item.label === 'npm scripts')?.status, 'fail');
   assert.equal(report.checks.find((item) => item.label === 'workspace')?.status, 'warn');
-  assert.equal(report.checks.find((item) => item.label === 'tmux agents')?.status, 'warn');
+  assert.equal(report.checks.find((item) => item.label === 'agent registry')?.status, 'warn');
+  assert.equal(report.checks.find((item) => item.label === 'tmux (optional)')?.status, 'warn');
   assert.match(renderDoctorReport(report), /Result: failures found\./);
 });

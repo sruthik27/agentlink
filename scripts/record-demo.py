@@ -18,12 +18,18 @@ CAST = ROOT / "demos" / "agentlink-demo.cast"
 COMMANDS = [
     "rm -rf /tmp/agentlink-demo && mkdir -p /tmp/agentlink-demo/producer /tmp/agentlink-demo/consumer",
     "cd /tmp/agentlink-demo/producer && node {cli} init",
-    "cd /tmp/agentlink-demo/producer && node {cli} start --topic 'Add account summary endpoint' --template api-change --max-rounds 4 --required-approvals 2",
-    "cd /tmp/agentlink-demo/producer && node {cli} send --from api-agent --role assistant --body 'Producer will expose GET /accounts/:id/summary with id, balance, and status.'",
-    "cd /tmp/agentlink-demo/producer && node {cli} contract --status Proposed --set-section 'API Surface' --content '- [x] Endpoint: GET /accounts/:id/summary\n- [x] Response fields: id, balance, status'",
-    "cd /tmp/agentlink-demo/producer && node {cli} approve --from api-agent",
-    "cd /tmp/agentlink-demo/producer && node {cli} approve --from web-agent",
-    "cd /tmp/agentlink-demo/producer && node {cli} contract --status Accepted --sync-to ../consumer",
+    "cd /tmp/agentlink-demo/consumer && node {cli} init",
+    "cd /tmp/agentlink-demo/producer && node {cli} start --topic 'Add account summary endpoint' --template api-change --max-messages 4 --required-approvals 2",
+    "cd /tmp/agentlink-demo/producer && node {cli} contract --status Proposed --set-section 'API Surface' --content '- [x] Endpoint: GET /accounts/:id/summary\n- [x] Response fields: id, balance, status' --sync-to ../consumer",
+    "cd /tmp/agentlink-demo/producer && node {cli} register --label api-agent --client codex --ttl 300 --id demo_api",
+    "cd /tmp/agentlink-demo/consumer && node {cli} register --label web-agent --client codex --ttl 300 --id demo_web",
+    "cd /tmp/agentlink-demo/consumer && node {cli} join",
+    "cd /tmp/agentlink-demo/producer && node {cli} send --role assistant --kind proposal --body 'Producer will expose GET /accounts/:id/summary with id, balance, and status.'",
+    "cd /tmp/agentlink-demo/consumer && node {cli} send --role assistant --kind decision --body 'Consumer agrees and will validate the shared response contract.'",
+    "cd /tmp/agentlink-demo/producer && node {cli} approve",
+    "cd /tmp/agentlink-demo/consumer && node {cli} approve",
+    "cd /tmp/agentlink-demo/producer && node {cli} contract --status Accepted",
+    "cd /tmp/agentlink-demo/producer && node {cli} list",
     "cd /tmp/agentlink-demo/producer && node {cli} status",
     "cd /tmp/agentlink-demo/consumer && python3 - <<'PY'\nfrom pathlib import Path\nprint(Path('.agentlink/CONTRACT.md').read_text().split('## Status')[0].strip())\nPY",
 ]
@@ -69,7 +75,7 @@ def main() -> None:
         if proc.returncode:
             raise SystemExit(proc.returncode)
     elapsed += 0.4
-    lines.append(json.dumps([elapsed, "o", "\r\n\u001b[1;32mDone: producer and consumer now share the accepted CONTRACT.md.\u001b[0m\r\n"], separators=(",", ":")))
+    lines.append(json.dumps([elapsed, "o", "\r\n\u001b[1;32mDone: two explicit agent registrations share one accepted contract and durable bus.\u001b[0m\r\n"], separators=(",", ":")))
     CAST.write_text("\n".join(lines) + "\n")
     print(CAST)
 

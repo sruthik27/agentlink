@@ -102,7 +102,7 @@ function releaseNotesFileName(version: string | undefined): string {
   const normalized = version?.trim();
   return normalized && /^\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?$/.test(normalized)
     ? `release-notes-v${normalized}.md`
-    : 'release-notes-v0.1.1.md';
+    : 'release-notes-v0.2.0.md';
 }
 
 function nodeEngineSupportsLaunchBaseline(value: unknown): boolean {
@@ -229,7 +229,7 @@ async function runInstalledMcpInitializeSmoke(binPath: string, cwd: string, expe
     params: {
       protocolVersion: '2024-11-05',
       capabilities: {},
-      clientInfo: { name: 'agentlink-ship-check', version: '0.1.1' },
+      clientInfo: { name: 'agentlink-ship-check', version: expectedVersion ?? 'unknown' },
     },
   }), 'utf8');
   const request = Buffer.concat([Buffer.from(`Content-Length: ${body.length}\r\n\r\n`, 'utf8'), body]);
@@ -387,12 +387,17 @@ export async function collectShipCheckReport(cwd = process.cwd()): Promise<ShipC
       'npm run agentlink -- ship-check',
       'npm run agentlink -- demo --peer',
       'npm run agentlink -- replay',
+      'agentlink register',
+      'agentlink wait',
+      'agentlink notify trust',
+      'agentlink wake enroll',
+      'agentlink wake run',
       'npm run agentlink -- version',
       'npm run agentlink -- launch-brief',
       'node dist/mcp/server.js',
     ]);
     checks.push(missingCommands.length === 0
-      ? item('ok', 'README command coverage', 'setup, doctor, demo, replay, version, launch-brief, ship-check, and MCP smoke commands documented')
+      ? item('ok', 'README command coverage', 'setup, registry, wait, trusted notification, doctor, demo, replay, version, launch-brief, ship-check, and MCP smoke commands documented')
       : item('fail', 'README command coverage', `missing command docs: ${missingCommands.join(', ')}`));
 
     const missingInstallUx = includesAll(readme, [
@@ -413,6 +418,19 @@ export async function collectShipCheckReport(cwd = process.cwd()): Promise<ShipC
       ? item('ok', 'README positioning', 'contract workflow, durable bus, and tmux boundary are explicit')
       : item('warn', 'README positioning', `missing positioning text: ${missingPositioning.join(', ')}`));
 
+    const missingReliabilityGuidance = includesAll(readme, [
+      'stable participant',
+      'expire',
+      'bounded',
+      'user trust',
+      'supervised/headless Codex',
+      'Migration from 0.1.1',
+      '.agentlink/*',
+    ]);
+    checks.push(missingReliabilityGuidance.length === 0
+      ? item('ok', 'README reliability guidance', 'stable actors, expiring registry, bounded waits, notification trust/limitations, migration, and gitignore policy documented')
+      : item('fail', 'README reliability guidance', `missing guidance: ${missingReliabilityGuidance.join(', ')}`));
+
     const demoMediaProblems = await validateDemoMedia(cwd);
     const readmeReferencesDemoMedia = readme.includes('demos/agentlink-demo.gif') && readme.includes('demos/agentlink-demo.cast');
     checks.push(readmeReferencesDemoMedia && demoMediaProblems.length === 0
@@ -426,7 +444,7 @@ export async function collectShipCheckReport(cwd = process.cwd()): Promise<ShipC
     const readmeReferencesReleaseNotes = readme.includes(releaseNotesPath);
     const releaseNotesReady = Boolean(
       releaseNotes
-      && releaseNotes.includes(`AgentLink ${version ?? '0.1.1'}`)
+      && releaseNotes.includes(`AgentLink ${version ?? '0.2.0'}`)
       && releaseNotes.includes('Verification before release')
       && releaseNotes.includes('Known limitation')
     );
