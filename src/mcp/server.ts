@@ -17,6 +17,7 @@ import {
 } from './remote-tools.js';
 import { initializeWorkspaceIdentity, resolveActiveParticipant } from '../workspace.js';
 import { CONNECT_TOOL, callConnectTool } from './connect-tools.js';
+import { SESSION_INSTRUCTIONS, SESSION_TOOL, SessionWorkspace } from './session-tools.js';
 
 import { NetworkWakeConnection, readNetworkWakeConfig, networkWakeInstructions, withNetworkWakeDispatch } from '../network/wake.js';
 
@@ -55,6 +56,7 @@ type StdioOutputMode = 'content-length' | 'jsonl';
 let outputMode: StdioOutputMode = 'content-length';
 const activeRequests = new Map<string, AbortController>();
 let remoteBinding: RemoteMcpBinding | undefined;
+let sessionWorkspace: SessionWorkspace | undefined;
 
 function requestKey(id: JsonRpcId | undefined): string | undefined {
   return id === undefined ? undefined : JSON.stringify(id);
@@ -117,14 +119,14 @@ async function handleRequest(request: JsonRpcRequest): Promise<void> {
       sendResult(request.id, {
         protocolVersion: '2024-11-05',
         capabilities: { tools: {}, ...(wakeConnection?.config.harness === 'claude-channel' ? { experimental: { 'claude/channel': {} } } : {}) },
-        ...(wakeConnection ? { instructions: networkWakeInstructions(wakeConnection.config) } : {}),
+        ...(sessionWorkspace ? { instructions: SESSION_INSTRUCTIONS } : wakeConnection ? { instructions: networkWakeInstructions(wakeConnection.config) } : {}),
         serverInfo: { name: 'agentlink-mcp', version: await readPackageVersion() },
       });
       return;
     }
 
     if (request.method === 'tools/list') {
-      sendResult(request.id, { tools: [...AGENTLINK_MCP_TOOLS, CONNECT_TOOL, ...AGENTLINK_REMOTE_MCP_TOOLS, ...(wakeConnection ? [wakeAckTool, wakeNextTool] : [])] });
+      sendResult(request.id, { tools: [...AGENTLINK_MCP_TOOLS, CONNECT_TOOL, ...AGENTLINK_REMOTE_MCP_TOOLS, ...(sessionWorkspace ? [SESSION_TOOL] : []), ...(wakeConnection ? [wakeAckTool, wakeNextTool] : [])] });
       return;
     }
 
@@ -136,6 +138,12 @@ async function handleRequest(request: JsonRpcRequest): Promise<void> {
       if (args !== undefined && (typeof args !== 'object' || args === null || Array.isArray(args))) {
         throw new Error('tools/call params.arguments must be an object');
       }
+      if (toolName === SESSION_TOOL.name) {
+        if (!sessionWorkspace) throw new Error('This MCP server has a fixed project binding');
+        sendResult(request.id, await sessionWorkspace.call((args ?? {}) as Record<string, unknown>));
+        return;
+      }
+      const workspace = sessionWorkspace ? sessionWorkspace.workspace() : process.cwd();
       if (toolName === 'agentlink_wake_next') {
         if (!wakeConnection) throw new Error('No enrolled wake connection');
         const a = (args ?? {}) as Record<string, unknown>;
@@ -150,10 +158,10 @@ async function handleRequest(request: JsonRpcRequest): Promise<void> {
       }
       if (wakeConnection) await wakeConnection.authorizeTool(toolName, (args ?? {}) as Record<string, unknown>);
       const result = toolName === CONNECT_TOOL.name
-        ? await callConnectTool((args ?? {}) as Record<string, unknown>, process.cwd(), controller?.signal)
+        ? await callConnectTool((args ?? {}) as Record<string, unknown>, workspace, controller?.signal)
         : isRemoteTool(toolName)
         ? await callRemoteAgentLinkTool(toolName, args as Record<string, unknown> | undefined, wakeConnection && remoteBinding ? { ...remoteBinding, remoteAgentId: wakeConnection.config.remoteAgentId } : remoteBinding)
-        : await callAgentLinkTool(toolName, args as Record<string, unknown> | undefined, process.cwd(), { signal: controller?.signal });
+        : await callAgentLinkTool(toolName, args as Record<string, unknown> | undefined, workspace, { signal: controller?.signal });
       if (wakeConnection) await wakeConnection.observe(toolName, (args ?? {}) as Record<string, unknown>, result);
       sendResult(request.id, result);
       return;
@@ -191,22 +199,27 @@ function tryReadJsonLine(buffer: Buffer): { body: string; nextOffset: number } |
   return { body, nextOffset: newline + 1 };
 }
 
-export async function serveStdio(): Promise<void> {
-  await initializeWorkspaceIdentity(process.cwd());
-  const startupActor = await resolveActiveParticipant(process.cwd());
-  process.env.AGENTLINK_PARTICIPANT_ID = startupActor.participantId;
-  const configuredNetworkRoot = process.env.AGENTLINK_NETWORK_STATE_ROOT;
-  remoteBinding = configuredNetworkRoot
-    ? { stateRoot: await realpath(configuredNetworkRoot), agentId: startupActor.participantId, workspaceRoot: await realpath(process.cwd()) }
-    : undefined;
-  const wakePath = process.env.AGENTLINK_WAKE_CONFIG;
-  if (wakePath) {
-    const config = await readNetworkWakeConfig(wakePath);
-    if (!remoteBinding || config.stateRoot !== remoteBinding.stateRoot || config.workspaceRoot !== remoteBinding.workspaceRoot || config.agentId !== remoteBinding.agentId) throw new Error('Wake enrollment does not match this MCP workspace/actor');
-    wakeConnection = new NetworkWakeConnection(config);
-    if (config.harness === 'codex') {
-      if (!process.env.AGENTLINK_WAKE_JOB_ID) throw new Error('Codex wake job binding required');
-      await wakeConnection.attach(process.env.AGENTLINK_WAKE_JOB_ID);
+export async function serveStdio(options: { sessionScoped?: boolean } = {}): Promise<void> {
+  if (options.sessionScoped) {
+    if (process.env.AGENTLINK_NETWORK_STATE_ROOT || process.env.AGENTLINK_WAKE_CONFIG || process.env.AGENTLINK_PARTICIPANT_ID || process.env.AGENTLINK_WAKE_JOB_ID) throw new Error('User-wide sessions cannot inherit project network or actor bindings');
+    sessionWorkspace = new SessionWorkspace();
+  } else {
+    await initializeWorkspaceIdentity(process.cwd());
+    const startupActor = await resolveActiveParticipant(process.cwd());
+    process.env.AGENTLINK_PARTICIPANT_ID = startupActor.participantId;
+    const configuredNetworkRoot = process.env.AGENTLINK_NETWORK_STATE_ROOT;
+    remoteBinding = configuredNetworkRoot
+      ? { stateRoot: await realpath(configuredNetworkRoot), agentId: startupActor.participantId, workspaceRoot: await realpath(process.cwd()) }
+      : undefined;
+    const wakePath = process.env.AGENTLINK_WAKE_CONFIG;
+    if (wakePath) {
+      const config = await readNetworkWakeConfig(wakePath);
+      if (!remoteBinding || config.stateRoot !== remoteBinding.stateRoot || config.workspaceRoot !== remoteBinding.workspaceRoot || config.agentId !== remoteBinding.agentId) throw new Error('Wake enrollment does not match this MCP workspace/actor');
+      wakeConnection = new NetworkWakeConnection(config);
+      if (config.harness === 'codex') {
+        if (!process.env.AGENTLINK_WAKE_JOB_ID) throw new Error('Codex wake job binding required');
+        await wakeConnection.attach(process.env.AGENTLINK_WAKE_JOB_ID);
+      }
     }
   }
   stdin.on('end', () => { if (wakeTimer) clearInterval(wakeTimer); });

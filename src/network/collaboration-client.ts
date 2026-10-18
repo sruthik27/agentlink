@@ -1,6 +1,6 @@
 import { join } from 'node:path';
 import { atomicWriteFile, readUtf8IfExists, withFileLock } from '../atomic.js';
-import { authenticatedRequest, AuthenticatedRequestError } from './a2a.js';
+import { authenticatedRequest, AuthenticatedRequestError, type AuthenticatedRequestOptions } from './a2a.js';
 import { requireAgentExposure, resolvePairedPeer } from './config.js';
 import { exportPublicIdentity } from './identity.js';
 import { newCollaborationRequestId, operateCollaboration, parseCollaborationOperation, parseCollaborationSnapshot, withLocalExecution, type Collaboration, type CollaborationOperation } from './collaboration.js';
@@ -26,7 +26,8 @@ async function mutate(root: string, fn: (s: ClientState) => void): Promise<void>
     await atomicWriteFile(file(root), raw);
   });
 }
-export async function callCollaboration(binding: CollaborationBinding, target: CollaborationTarget, value: unknown): Promise<{ snapshot: Collaboration; cached: false }> {
+export async function callCollaboration(binding: CollaborationBinding, target: CollaborationTarget, value: unknown, options: AuthenticatedRequestOptions = {}): Promise<{ snapshot: Collaboration; cached: false }> {
+  options.signal?.throwIfAborted();
   const { stateRoot: root, agentId, workspaceRoot } = binding;
   validateNetworkId(agentId, 'locally bound agent'); validateNetworkId(target.agent, 'target agent');
   validateNetworkId(target.conversationId, 'conversationId');
@@ -70,7 +71,7 @@ export async function callCollaboration(binding: CollaborationBinding, target: C
   } else {
     const response = await authenticatedRequest(root, `${peer.address}/v1/collaboration`, peer.identity, 'POST', {
       agentId, authorityAgentId: target.agent, conversationId: target.conversationId, operation: op,
-    }) as { requestHash: string; snapshot: unknown };
+    }, options) as { requestHash: string; snapshot: unknown };
     if (response?.requestHash !== operationHash) throw new Error('Collaboration response request mismatch');
     snapshot = parseCollaborationSnapshot(response.snapshot);
   }

@@ -431,13 +431,18 @@ export class AuthenticatedRequestError extends Error {
   constructor(readonly statusCode: number, message: string) { super(message); }
 }
 
+export interface AuthenticatedRequestOptions { timeoutMs?: number; signal?: AbortSignal; }
+
 export async function authenticatedRequest(
   stateRoot: string,
   endpoint: string,
   peer: NodePublicIdentity,
   method: 'GET' | 'POST',
   body?: unknown,
+  options: AuthenticatedRequestOptions = {},
 ): Promise<unknown> {
+  options.signal?.throwIfAborted();
+  if (options.timeoutMs !== undefined && (!Number.isFinite(options.timeoutMs) || options.timeoutMs < 1 || options.timeoutMs > 5000)) throw new Error('Request timeout must be from 1 to 5000 milliseconds');
   if (new URL(endpoint).protocol !== 'https:') throw new Error('Authenticated endpoint must use HTTPS');
   const trusted = await getTrustedPeer(stateRoot, peer.nodeId);
   if (!trusted || trusted.version !== peer.version || trusted.fingerprint !== peer.fingerprint
@@ -449,6 +454,7 @@ export async function authenticatedRequest(
   return await new Promise((resolve, reject) => {
     const req = request(endpoint, {
       method,
+      signal: options.signal,
       cert: identity.certificatePem,
       key: identity.privateKeyPem,
       ca: peer.certificatePem,
@@ -462,7 +468,7 @@ export async function authenticatedRequest(
       const chunks: Buffer[] = [];
       let size = 0;
       response.on('error', reject);
-      response.on('aborted', () => reject(new Error('A2A response was aborted')));
+      response.on('aborted', () => reject(Object.assign(new Error('A2A response was aborted'), { code: 'ECONNRESET' })));
       response.on('data', (chunk: Buffer) => {
         size += chunk.length;
         if (size > MAX_WIRE_BYTES) req.destroy(new Error('A2A response exceeds the wire limit'));
@@ -478,7 +484,7 @@ export async function authenticatedRequest(
         }
       });
     });
-    const deadline = setTimeout(() => req.destroy(new Error('A2A request timed out')), 5_000);
+    const deadline = setTimeout(() => req.destroy(Object.assign(new Error('A2A request timed out'), { code: 'ETIMEDOUT' })), options.timeoutMs ?? 5_000);
     req.once('close', () => clearTimeout(deadline));
     req.on('error', reject);
     req.end(payload);

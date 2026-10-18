@@ -1,6 +1,6 @@
 {
   "name": "@sruthik/agentlink",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "description": "Local-first coordination bus for coding agents working across repos through durable contracts.",
   "type": "module",
   "bin": {
@@ -38,7 +38,9 @@
     "scripts/verify-connect-installed.mjs",
     "scripts/verify-setup-installed.mjs",
     "scripts/verify-network-wake.mjs",
-    "scripts/verify-network-native-adapters.mjs"
+    "scripts/verify-network-native-adapters.mjs",
+    "release-notes-v0.3.1.md",
+    "docs/agent-install.md"
   ],
   "scripts": {
     "build": "tsc -p tsconfig.json",

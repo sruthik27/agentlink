@@ -5,6 +5,12 @@ import { isAbsolute } from 'node:path';
 async function main(): Promise<void> {
   const options: Record<string, string> = {};
   const args = process.argv.slice(2);
+  if (args.length === 1 && args[0] === '--session') {
+    for (const name of ['AGENTLINK_NETWORK_STATE_ROOT', 'AGENTLINK_WAKE_CONFIG', 'AGENTLINK_PARTICIPANT_ID', 'AGENTLINK_WAKE_JOB_ID']) delete process.env[name];
+    const { serveStdio } = await import('./server.js');
+    await serveStdio({ sessionScoped: true });
+    return;
+  }
   for (let i = 0; i < args.length; i += 2) {
     const name = args[i], value = args[i + 1];
     if (!['--workspace', '--state-root', '--wake-config'].includes(name) || !value || !isAbsolute(value) || options[name]) throw new Error('Usage: launch --workspace <absolute-path> [--state-root <absolute-path>] [--wake-config <absolute-path>]');

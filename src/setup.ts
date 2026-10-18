@@ -160,7 +160,7 @@ function renderCopilotSection(): string[] {
     'Configure project MCP, then start Copilot in this trusted repo and inspect /mcp. Organization policy may restrict servers.',
     '',
     '```bash',
-    'agentlink setup --harness copilot --write --check',
+    'agentlink setup --harness copilot --scope user --write --check',
     'copilot',
     '```',
   ];
@@ -188,7 +188,7 @@ export function renderSetupGuideMarkdown(guide: SetupGuide): string {
     '- Install: `npm install -g @sruthik/agentlink` or run with `npx @sruthik/agentlink ...`',
     '- Quick check: `npx @sruthik/agentlink doctor`',
     '- Smoke test: `agentlink doctor`, then add `agentlink-mcp` to your coding agent MCP config.',
-    '- Project quick setup: `agentlink setup --harness copilot --write --check` (also claude-code, codex, gemini or opencode).',
+    '- User-wide quick setup (all repos): `agentlink setup --harness copilot --scope user --write --check` (also claude-code, codex, gemini or opencode).',
     '- Preview: `agentlink setup --harness copilot --config`. Conflicting entries, existing Codex TOML and OpenCode JSONC are preserved for explicit merge.',
     '- The check initializes local workspace metadata and proves MCP startup/tool discovery; native model use and auto-wake are separate gates.',
     '- Cross-repo pairing: from the owner repo run `agentlink contract --conversation <id> --sync-to ../peer`, then from the peer run `agentlink join --conversation <id>`.',

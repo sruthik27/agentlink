@@ -1,60 +1,63 @@
 # AgentLink — connect your coding agents
 
-[Installation prompt](#let-your-agent-set-it-up) · [npm](https://www.npmjs.com/package/@sruthik/agentlink) · [Website](https://sruthik27.github.io/agentlink/) · [0.3.0 release notes](release-notes-v0.3.0.md)
+[Installation prompt](#let-your-agent-set-it-up) · [npm](https://www.npmjs.com/package/@sruthik/agentlink) · [Website](https://sruthik27.github.io/agentlink/) · [0.3.1 release notes](release-notes-v0.3.1.md)
 
 Let coding agents in separate repositories and on different computers communicate, negotiate interfaces, and keep durable agreements. Use your existing coding agent through the CLI or MCP.
 
 **Install → ask your agent to connect → share one code.**
 
-Version **0.3.0** is published on npm. Direct connections require a shared LAN or existing private VPN, Node.js 20+ and OpenSSL. Physical-host acceptance of the new connection flow remains pending; see [verification status](docs/network-acceptance.md).
+Version **0.3.1** adds user-wide MCP setup, session workspace binding, resilient waits and a connection monitor. Direct connections require a shared LAN or existing private VPN, Node.js 20+ and OpenSSL. Physical-host acceptance of the new connection flow remains pending; see [verification status](docs/network-acceptance.md).
 
 ## Install
 
 ### Let your agent set it up
 
-Copy this prompt into your coding agent in the repository where you want to use AgentLink. It installs the CLI, configures MCP for the current harness when supported, and checks the result. Requires an agent with terminal and configuration-file access; restricted clients may need an owner/admin step.
+Copy this prompt into your coding agent. It installs AgentLink once for your user and configures the current harness across repositories. Requires terminal and configuration-file access; restricted clients may need an owner/admin step.
 
 ```text
-Install and configure AgentLink for me in this repository. Complete the setup
-yourself using terminal and file tools, and preserve my code and existing settings.
+Install AgentLink globally for my user, and configure user-wide MCP for this
+coding harness so I can use it in sessions from any repository. Complete the
+setup yourself while preserving my code, other MCP servers and existing settings.
 
-1. Identify this coding harness and the current repository. Check Node.js (20+)
-   and npm. Install the official package with:
+1. Check Node.js (20+) and npm. Install the official package:
    npm install -g @sruthik/agentlink@latest --prefer-online
    If global installation is not writable, use a persistent user-owned npm prefix
-   and resolve its executable paths; do not use sudo or save an ephemeral npx path
-   in MCP config. If prerequisites cannot be installed within existing permissions,
-   report the one necessary owner action.
-2. Verify the installed package using `agentlink version --format json` and
-   `agentlink connect help`. Resolve PATH conflicts so you use @sruthik/agentlink
-   version 0.3.0 or newer, not a different package named agentlink.
-3. Configure MCP for THIS harness. Read `agentlink setup` help, then preview with
-   `agentlink setup --harness <harness> --config`. Supported profiles are
-   claude-code, codex, copilot, gemini and opencode. Apply with --write --check.
-   If an existing config needs an explicit merge, back it up and merge only the
-   AgentLink entry. Preserve all other settings, comments and MCP servers; verify
-   the diff. Reuse a working existing entry instead of creating a duplicate.
-   Prefer project scope. For another MCP client, use the stdio profile and its
-   current official configuration docs. Do not guess the schema or configure
-   other installed harnesses. An agent without local stdio MCP can use the CLI.
-4. Check MCP startup with --check. If this session exposes AgentLink MCP tools,
-   make a read-only status/list call. Otherwise use the CLI now and tell me the
-   exact reconnect/restart or trust step needed to load MCP. Do not claim that a
-   server handshake proves this session loaded the tools. Never end my session
-   or bypass its approval/organization policy.
-5. Report the installed version, config path/scope, verification results, and any
-   remaining action briefly. Explain that the CLI is available across repos;
-   project MCP setup must be repeated for each repo. Stop when installation is
-   ready. Do not create connections or start background listeners yet.
+   and resolve executable paths. Do not use sudo or save an ephemeral npx path.
+2. Verify `agentlink version --format json` and `agentlink connect help`.
+   User-wide setup below needs version 0.3.1+. Avoid a different package named
+   agentlink or a stale executable earlier on PATH.
+3. Detect THIS harness. Preview `agentlink setup --harness <harness> --scope user
+   --config`, then apply with --write --check. Profiles: claude-code, codex,
+   copilot, gemini, opencode. If config requires an explicit merge, back it up
+   and merge only the proposed AgentLink entry, preserving other keys/comments.
+   Respect custom config locations; use the harness's current official docs and
+   native user-scope registration when needed. Reuse or deliberately migrate an
+   existing entry instead of creating a duplicate. Do not pin the global entry
+   to this repo or install repo-level MCP files. For another local stdio client,
+   use the stdio profile with --scope user and its documented user config format.
+4. Verify MCP startup with --check. If tools are loaded in this session, use
+   agentlink_session to bind this session's actual absolute working directory,
+   then make a read-only status/list call. Each future session selects its own
+   workspace through that tool automatically; there is no per-repo installation.
+   If MCP isn't loaded yet, give the one required reconnect/restart/trust step and
+   use the CLI now. Do not claim a handshake proves native tool loading. Never
+   end my session or bypass harness/organization policy.
+5. Briefly report the version, user config path, checks and remaining action.
+   Stop when installation is ready. Do not connect to a peer yet.
 
-After setup I should be able to say: "Use AgentLink to connect to Alice at
-192.168.1.11 and give me the connection code", or "Accept this AgentLink code:
-AL1-...". Use `agentlink connect` help or the loaded agentlink_connect tool for
-that later request. Pair only on my direct instruction; share codes privately.
-Pairing authorizes finite communication, not remote shell or code execution.
+Later I can say "Use AgentLink to connect to Alice at 192.168.1.11 and give me
+one connection code", or "Accept this AgentLink code: AL1-...". Pair only on my
+local instruction and share codes privately. After pairing, keep communication
+active without manual inbox checks. Read pending messages and retain the audit
+cursor. Where supported, automatically run the returned connection monitor in
+this harness's native Monitor/background tool that wakes the SAME session on
+stdout. Re-arm it only within the unchanged connection expiry. A detached shell
+watcher alone cannot wake a model. Otherwise use active bounded waits and report
+that idle wake isn't supported here. Do not launch a competing model worker,
+renew permissions, or treat communication as permission to execute peer code.
 ```
 
-The [installation prompt guide](docs/agent-install.md) explains scope, verification and the follow-up connection flow. Installing npm alone does not register MCP in every coding app or inject tools into an already running session.
+The [installation guide](docs/agent-install.md) explains global scope, verification and the connection flow. MCP registration is per harness/user, rather than per repository. Existing sessions may need one reconnect to load newly configured tools.
 
 ### Manual installation
 
@@ -65,14 +68,14 @@ agentlink version --format json
 npx @sruthik/agentlink doctor
 ```
 
-An agent with terminal access can use the CLI immediately in any repository. For MCP, run this from the chosen repository with your harness profile:
+An agent with terminal access can use the CLI immediately in any repository. For MCP, register once for your user with your harness profile:
 
 ```sh
-agentlink setup --harness claude-code --write --check
+agentlink setup --harness claude-code --scope user --write --check
 # Profiles: claude-code, codex, copilot, gemini, opencode
 ```
 
-Existing settings are preserved. Conflicting entries and existing TOML/JSONC may need an explicit merge; see [setup](docs/setup.md). MCP may require reconnecting the session and approving the normal project trust prompt. Installing npm alone does not register MCP with every app.
+Existing settings are preserved. Conflicting entries and existing TOML/JSONC may need an explicit merge; see [setup](docs/setup.md). Each session binds its own workspace at first use. MCP may require reconnecting once and approving the normal trust prompt. Project-only setup remains available with `--scope project`. Installing npm alone does not register MCP with every app.
 
 ## Connect two agents
 
@@ -87,7 +90,7 @@ Existing settings are preserved. Conflicting entries and existing TOML/JSONC may
 
 Use Alice's actual reachable IP. AgentLink manages private identities, scoped communication permissions and background listeners. Codes expire after ten minutes; connections last at most two hours without automatic renewal.
 
-The agents can exchange messages and use bounded waits while actively communicating. Pairing grants communication only: repository changes, command execution, commits and publication still need each owner's authorization. It does not enable universal idle-agent wake. See [connection commands and troubleshooting](docs/connect.md).
+The agents can exchange messages and use bounded waits while actively communicating. Pairing grants communication only: repository changes, command execution, commits and publication still need each owner's authorization. Native Monitor/background consumers can wake a supported existing agent session; pairing cannot add missing harness capabilities. See [connection commands and troubleshooting](docs/connect.md).
 
 ## What you can do
 

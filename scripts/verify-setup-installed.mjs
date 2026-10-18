@@ -27,8 +27,13 @@ try {
     assert(plan.args[0].startsWith(pkg));
     await writeSetup(plan);
     assert.equal((await checkSetup(plan)).status, 'mcp-handshake-passed');
+    const home = join(root, `${harness}-home`); await mkdir(home);
+    const global = await planSetup(repo, harness, undefined, undefined, 'user', home, {});
+    assert.deepEqual(global.args.slice(1), ['--session']);
+    await writeSetup(global);
+    assert.equal((await checkSetup({ ...global, workspace: home })).status, 'mcp-handshake-passed');
   }
   const version = JSON.parse(run(process.execPath, [join(pkg, 'dist/cli.js'), 'version', '--format', 'json']));
   assert(await readFile(join(pkg, 'docs/setup.md'), 'utf8'));
-  console.log(JSON.stringify({ result: 'PASS', archiveSha256: createHash('sha256').update(await readFile(archive)).digest('hex'), runtime: version, adapters: 5, nativeAgentVerified: false }));
+  console.log(JSON.stringify({ result: 'PASS', archiveSha256: createHash('sha256').update(await readFile(archive)).digest('hex'), runtime: version, adapters: 5, scopes: ['project', 'user'], nativeAgentVerified: false }));
 } finally { await rm(root, { recursive: true, force: true }); }

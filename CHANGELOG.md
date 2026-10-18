@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.3.1 - 2026-10-19
+
+- Add user-wide MCP setup and explicit per-session workspace/actor binding without per-repo installation.
+- Retry transient long-wait checks within the overall deadline, with in-flight cancellation and explicit unavailable results; do not retry sends or trust failures.
+- Return automatic native-consumer setup instructions and add a finite connection monitor that emits scoped incoming references, filters own messages and stops with its connection.
+- Update installation prompts, setup docs and website for global installation and supported native background consumption.
+
 ## 0.3.0 - 2026-10-19
 
 - Agent-driven network connection: request a developer at an IP, share one expiring code, and accept it from another current project. Private identities, scoped grants, mutual-TLS listeners and conversation acceptance are automatic. CLI and MCP support send/receive/wait/status/stop; pairing never grants repository execution or universal idle wake.

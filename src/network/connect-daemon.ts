@@ -12,7 +12,7 @@ import { addGrant, certificateDerFingerprint, listLocalGrantSummaries } from './
 import { createCollaboration, listLocalCollaborationSummaries } from './collaboration.js';
 import { callCollaboration } from './collaboration-client.js';
 import { parseNodePublicIdentity, validateNetworkId, type NodePublicIdentity } from './types.js';
-import { parseConnectionCode, type ConnectionCode, type ConnectionRecord } from './connect.js';
+import { parseConnectionCode, connectionConsumerInstructions, type ConnectionCode, type ConnectionRecord } from './connect.js';
 
 const file = process.argv[2]!;
 const c: ConnectionRecord = JSON.parse(await readFile(file, 'utf8'));
@@ -177,7 +177,7 @@ process.once('message', async (message: { start?: boolean; code?: string }) => {
     timer = setTimeout(() => { void stop(); }, Math.max(1, Date.parse(c.expiresAt) - Date.now()));
     control = setInterval(() => { void access(join(c.root, 'stop')).then(stop, () => {}); }, 250);
     const result = c.role === 'invite' ? await invite() : await accept(message.code!);
-    process.send?.({ ready: true, ...result });
+    process.send?.({ ready: true, ...result, consumer: connectionConsumerInstructions(c.id, c.workspace, c.actor) });
   } catch (error) {
     c.status = 'failed'; c.error = (error as Error).message.slice(0, 200); await save();
     process.send?.({ error: c.error }); await stop();
