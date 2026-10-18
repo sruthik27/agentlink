@@ -1,0 +1,85 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { execFile } from 'node:child_process';
+import { promisify } from 'node:util';
+import { mkdtemp, mkdir, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { parseConnectionCode } from './connect.js';
+const run = promisify(execFile);
+const cli = fileURLToPath(new URL('../cli.js', import.meta.url));
+
+test('one code connects two fresh projects, pins identities, scopes messaging and stops managed listeners', async t => {
+  const base = await mkdtemp(join(tmpdir(), 'agentlink-connect-'));
+  const repos = ['a','b','intruder','wrong-pin'].map(x => join(base,x));
+  await Promise.all(repos.map(repo => mkdir(repo)));
+  const store = join(base,'private');
+  const env: NodeJS.ProcessEnv = { ...process.env, AGENTLINK_CONNECTION_HOME: store };
+  delete env.AGENTLINK_PARTICIPANT_ID;
+  const call = async (repo: string, args: string[]) => JSON.parse((await run(process.execPath, [cli,'connect',...args], { cwd: repo, env, timeout: 25000 })).stdout);
+  let id: string | undefined;
+  t.after(async () => {
+    if (id) for (const repo of repos) await call(repo,['stop','--connection',id]).catch(() => {});
+    await new Promise(r => setTimeout(r,500));
+    await rm(base,{recursive:true,force:true});
+  });
+  const invite = await call(repos[0]!,['--to','Alice','--ip','127.0.0.1']);
+  id = invite.id;
+  assert.equal(invite.status,'waiting-for-developer');
+  const code = parseConnectionCode(invite.code);
+  const bad = { ...code, pin: 'sha256:'+'0'.repeat(64) };
+  await assert.rejects(call(repos[3]!,['--code','AL1-'+Buffer.from(JSON.stringify(bad)).toString('base64url')]),/certificate does not match/);
+  assert.equal((await call(repos[0]!,['status'])).connections[0].status,'waiting');
+  const accepted = await call(repos[1]!,['--code',invite.code]);
+  assert.equal(accepted.status,'connected');
+  assert.equal(accepted.communicationOnly,true);
+  assert.equal((await call(repos[0]!,['status'])).connections[0].status,'connected');
+  await call(repos[0]!,['send','--connection',id!,'--body','hello Alice','--request-id','one-message']);
+  await call(repos[0]!,['send','--connection',id!,'--body','hello Alice','--request-id','one-message']);
+  const received = await call(repos[1]!,['receive','--connection',id!]);
+  assert.equal(received.snapshot.audit.filter((x: { operation: { type: string } }) => x.operation.type==='discuss').length,1);
+  assert.equal(received.snapshot.audit.at(-1).operation.content,'hello Alice');
+  const after = received.snapshot.audit.at(-1).sequence;
+  const pending = call(repos[1]!,['wait','--connection',id!,'--after',String(after),'--timeout-seconds','2']);
+  await call(repos[0]!,['send','--connection',id!,'--body','new event while waiting','--request-id','second-message']);
+  const awakened = await pending;
+  assert.equal(awakened.changed,true);
+  assert.equal(awakened.snapshot.audit.at(-1).operation.content,'new event while waiting');
+  assert.equal((await call(repos[1]!,['wait','--connection',id!,'--after',String(awakened.snapshot.audit.at(-1).sequence),'--timeout-seconds','1'])).changed,false);
+  await assert.rejects(call(repos[0]!,['send','--connection',id!,'--body','different','--request-id','one-message']),/Conflicting/);
+  assert.deepEqual((await call(repos[2]!,['status'])).connections,[]);
+  await assert.rejects(call(repos[2]!,['receive','--connection',id!]),/ENOENT/);
+  await assert.rejects(call(repos[2]!,['--code',invite.code]),/Invitation rejected/);
+  await call(repos[1]!,['send','--connection',id!,'--body','hello back']);
+  const back = await call(repos[0]!,['receive','--connection',id!]);
+  assert.equal(back.snapshot.audit.at(-1).operation.content,'hello back');
+  assert.deepEqual(back.snapshot.tasks,[]);
+  assert.deepEqual(back.snapshot.approvals,[]);
+  await call(repos[0]!,['stop','--connection',id!]);
+  await new Promise(r => setTimeout(r,500));
+  assert.equal((await call(repos[0]!,['status'])).connections[0].status,'stopped');
+  await assert.rejects(call(repos[0]!,['send','--connection',id!,'--body','after stop']),/not live/);
+});
+
+test('connection codes reject malformed, oversized, expired and overlong invitations', () => {
+  for (const value of ['', 'AL1-'+ 'x'.repeat(3000), 'AL1-e30']) assert.throws(()=>parseConnectionCode(value),/Invalid/);
+  const fields = { v:1, host:'127.0.0.1', port:1234, pin:'sha256:'+'a'.repeat(64), token:'x'.repeat(43), id:'c-test', expires:'2000-01-01T00:00:00.000Z', until:new Date(Date.now()+1000).toISOString() };
+  const encode = (value: unknown) => 'AL1-'+Buffer.from(JSON.stringify(value)).toString('base64url');
+  assert.throws(()=>parseConnectionCode(encode(fields)),/expired/);
+  assert.throws(()=>parseConnectionCode(encode({...fields, expires:new Date(Date.now()+700000).toISOString(), until:new Date(Date.now()+9000000).toISOString()})),/finite lifetime/);
+  assert.throws(()=>parseConnectionCode(encode({...fields, extra:'scope'})),/Invalid/);
+});
+
+test('IPv6 pairing compares canonical IPs rather than their spelling', async t => {
+  const base=await mkdtemp(join(tmpdir(),'agentlink-connect-ipv6-'));
+  const repos=[join(base,'a'),join(base,'b')];await Promise.all(repos.map(repo=>mkdir(repo)));
+  const env: NodeJS.ProcessEnv={...process.env,AGENTLINK_CONNECTION_HOME:join(base,'private')};delete env.AGENTLINK_PARTICIPANT_ID;
+  const call=async(repo:string,args:string[])=>JSON.parse((await run(process.execPath,[cli,'connect',...args],{cwd:repo,env,timeout:25000})).stdout);
+  let id:string|undefined;
+  t.after(async()=>{if(id)for(const repo of repos)await call(repo,['stop','--connection',id]).catch(()=>{});await new Promise(r=>setTimeout(r,500));await rm(base,{recursive:true,force:true})});
+  const invite=await call(repos[0]!,['--to','IPv6 developer','--ip','0:0:0:0:0:0:0:1']);id=invite.id;
+  assert.equal((await call(repos[1]!,['--code',invite.code])).status,'connected');
+  await call(repos[1]!,['send','--connection',id!,'--body','IPv6 works']);
+  assert.equal((await call(repos[0]!,['receive','--connection',id!])).snapshot.audit.at(-1).operation.content,'IPv6 works');
+});

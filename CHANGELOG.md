@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.3.0 - 2026-10-19
+
+- Agent-driven network connection: request a developer at an IP, share one expiring code, and accept it from another current project. Private identities, scoped grants, mutual-TLS listeners and conversation acceptance are automatic. CLI and MCP support send/receive/wait/status/stop; pairing never grants repository execution or universal idle wake.
+
+- Authenticated peer nodes with verified public identity pinning, finite grants, actor-bound MCP routing, and durable retry handling.
+- Revision/digest-bound collaboration, approvals, scoped local execution permits, task processing evidence, cancellation and revocation.
+- Opt-in finite wake enrollments with exact-event read/acknowledgement and Monitor/OpenCode adapters; native and physical-host verification have separate support boundaries.
+- Project MCP setup for Claude Code, Copilot CLI, Codex, Gemini, OpenCode and generic stdio clients, with preserved configuration, backups and a real startup check.
+- Read-only network diagnostics, TTL input, actionable recovery errors and runtime build fingerprints.
+- Reproducible local release gate: `npm run verify:release`. See [release readiness](docs/release-readiness.md) for the remaining physical-host gate. Physical-host verification remains pending; npm publication is owner-authorized for installation and testing.
+
 ## 0.2.0 - 2026-10-04
 
 Durable cross-repo reliability and an opt-in supervised/headless Codex wake path. Distribution availability is recorded separately by npm and GitHub Releases.

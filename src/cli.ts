@@ -65,6 +65,7 @@ import { collectDoctorReport, renderDoctorReport } from './doctor.js';
 import { collectLaunchBrief, renderLaunchBriefMarkdown } from './launch-brief.js';
 import { collectShipCheckReport, renderShipCheckReport } from './ship-check.js';
 import { collectSetupGuide, parseSetupHarness, renderSetupGuideMarkdown } from './setup.js';
+import { planSetup, writeSetup, checkSetup } from './setup-config.js';
 import {
   configureTrustedNotificationAdapter,
   listTrustedNotificationAdapters,
@@ -82,10 +83,17 @@ import {
   runCodexWakeSupervisor,
   setCodexWakePaused,
 } from './auto-wake.js';
+import { runNetworkCli } from './network/cli.js';
+import { runtimeBuildIdentity } from './build-info.js';
+import { runConnectCli } from './network/connect.js';
 
 const help = `AgentLink — local-first cross-repo coding-agent coordination
 
 Usage:
+  agentlink connect --to <developer> --ip <peer-ip>
+      Share one expiring connection code; recipient runs connect --code <code> in their project
+  agentlink connect help
+      Agent-driven pairing, messages, status and stop; no manual network setup
   agentlink init [--new-workspace]
       Create .agentlink workspace files in the current repo
   agentlink actor <show|list|add|use|rename> [--name <label>] [--id <participant-id>]
@@ -108,16 +116,18 @@ Usage:
       Print a compact repo fingerprint for agent handoffs without source content
   agentlink doctor [--format <text|json>]
       Check local AgentLink prerequisites, workspace state, tmux visibility, and MCP build output
-  agentlink setup [--harness <stdio|claude-code|codex|copilot|opencode|gemini|all>] [--format <markdown|json>]
-      Print local install, MCP, and harness setup instructions
+  agentlink setup [--harness <stdio|claude-code|codex|copilot|opencode|gemini|all>] [--format <markdown|json>] [--config|--write] [--check] [--state-root <absolute-path>] [--wake-config <absolute-path>]
+      Print setup instructions; --write configures this project, --check verifies MCP startup
   agentlink demo --peer <repo-path> [--topic <topic>] [--format <markdown|json>]
       Run a deterministic two-repo contract negotiation demo using the local bus
   agentlink ship-check [--format <text|json>]
       Check packaging/docs/readiness gates before requesting launch approval
   agentlink launch-brief [--format <markdown|json>]
       Print the final human approval brief, verification commands, artifacts, and launch boundary
-  agentlink version
-      Print the installed AgentLink package version
+  agentlink version [--format json]
+      Print the package version; JSON also fingerprints installed runtime bytes for private builds
+  agentlink network <node|peer|agent|grant|serve|discover|send|receive|status> ... --state-root <absolute-path>
+      Configure and use the experimental authenticated network bridge; run agentlink network for exact usage
   agentlink join [--conversation <id>]
       Join the selected conversation as the configured participant
   agentlink revoke --conversation <id> --participant <participant-id>
@@ -147,6 +157,8 @@ Usage:
       Inspect trusted adapter ids or explicitly retry a failed/deduplicated notification event
   agentlink receiver --inbox <absolute-path> --event-id <id> --bus-id <id> --conversation-id <id> --message-id <id> --registration-id <id>
       Concrete local receiver used by a trusted adapter; records event references only and deduplicates by event id
+  agentlink network wake enroll --state-root <path> --id <id> --peer <name> --agent <id> --authority <local|peer> --conversation <ids> --harness <codex|claude-channel|claude-monitor|opencode> --expires-at <ISO> --policy <absolute-path> [--codex <absolute-path>]
+  agentlink network wake <connect|run|once|peek|monitor|status|pause|resume|stop|retry> --state-root <path> --id <id> [--event <event-id>]
   agentlink wake enroll --recipient <id> --conversation <id[,id...]> --codex <absolute-path> [--config <absolute-path>] [--state <absolute-path>] [--trust-config <absolute-path>] [--model <model>]
       Enroll this workspace actor as a supervised headless Codex recipient using user-owned config/state
   agentlink wake <run|once|status|pause|resume|stop|retry> --config <absolute-path> [--job <job-id>]
@@ -325,8 +337,19 @@ export async function runCli(
   }
 
   if (command === 'version' || command === '--version' || command === '-v') {
-    if (args.length > 1) throw new UsageError('Usage: agentlink version');
-    output.log(await readPackageVersion(cwd));
+    if (args.length !== 1 && !(args.length === 3 && args[1] === '--format' && args[2] === 'json')) throw new UsageError('Usage: agentlink version [--format json]');
+    const version = await readPackageVersion(cwd);
+    output.log(args.length === 1 ? version : JSON.stringify({ version, ...await runtimeBuildIdentity() }));
+    return;
+  }
+
+  if (command === 'network') {
+    await runNetworkCli(args.slice(1), cwd, output);
+    return;
+  }
+
+  if (command === 'connect') {
+    await runConnectCli(args.slice(1), cwd, output);
     return;
   }
 
@@ -372,7 +395,7 @@ export async function runCli(
       ? ['remove']
       : command === 'send'
         ? ['notify']
-        : [];
+        : command === 'setup' ? ['write', 'check', 'config'] : [];
   const { options, positionals } = parseArguments(args.slice(1), booleanOptions);
 
   if (command === 'actor') {
@@ -391,7 +414,7 @@ export async function runCli(
     }
     if (action === 'add') {
       if (!options.name) throw new UsageError('Usage: agentlink actor add --name <label>');
-      const participant = await registerParticipant(cwd, { displayName: options.name });
+      const participant = await registerParticipant(cwd, { displayName: options.name, ...(options.id ? { participantId: options.id } : {}) });
       output.log(`Participant registered and selected: ${participant.participantId} ${participant.displayName}`);
       return;
     }
@@ -545,13 +568,24 @@ export async function runCli(
   }
 
   if (command === 'setup') {
-    rejectUnknownOptions(options, ['harness', 'format']);
+    rejectUnknownOptions(options, ['harness', 'format', 'write', 'check', 'config', 'state-root', 'wake-config']);
     if (positionals.length > 0) throw new UsageError('Usage: agentlink setup [--harness <stdio|claude-code|codex|copilot|opencode|gemini|all>] [--format <markdown|json>]');
     const format = options.format ?? 'markdown';
     if (!['markdown', 'json'].includes(format)) throw new UsageError('--format must be markdown or json');
     const harness = options.harness === undefined || options.harness === 'all'
       ? 'all'
       : parseSetupHarness(options.harness);
+    if (options.write || options.check || options.config || options['state-root'] || options['wake-config']) {
+      if (harness === 'all') throw new UsageError('Choose one --harness for project setup: claude-code, codex, copilot, gemini, opencode or stdio');
+      const plan = await planSetup(cwd, harness, options['state-root'], options['wake-config']);
+      const result = {
+        ...plan,
+        ...(options.write ? { installation: await writeSetup(plan) } : {}),
+        ...(options.check ? { check: await checkSetup(plan) } : {}),
+      };
+      output.log(JSON.stringify(result, null, 2));
+      return;
+    }
     const guide = await collectSetupGuide(cwd, harness);
     output.log(format === 'json'
       ? JSON.stringify(guide, null, 2)

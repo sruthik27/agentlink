@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
@@ -8,6 +8,8 @@ import {
   parseSetupHarness,
   renderSetupGuideMarkdown,
 } from './setup.js';
+
+const packageVersion = JSON.parse(await readFile(new URL('../package.json', import.meta.url), 'utf8')).version as string;
 
 test('setup guide renders deterministic local MCP and harness instructions', async (t) => {
   const cwd = await mkdtemp(join(tmpdir(), 'agentlink-setup-'));
@@ -21,7 +23,7 @@ test('setup guide renders deterministic local MCP and harness instructions', asy
 
   const guide = await collectSetupGuide(cwd, 'claude-code');
   assert.equal(guide.packageName, '@sruthik/agentlink');
-  assert.equal(guide.version, '0.2.0');
+  assert.equal(guide.version, packageVersion);
   assert.equal(guide.mcpCommand, 'agentlink-mcp');
   assert.deepEqual(guide.mcpArgs, []);
   assert.deepEqual(guide.harnesses, ['claude-code']);

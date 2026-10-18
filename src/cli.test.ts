@@ -11,6 +11,7 @@ import { appendMessage, createConversation, readConversation } from './store.js'
 
 const execFileAsync = promisify(execFile);
 const cliPath = fileURLToPath(new URL('./cli.js', import.meta.url));
+const packageVersion = JSON.parse(await readFile(new URL('../package.json', import.meta.url), 'utf8')).version as string;
 
 const fakeMcpServer = `#!/usr/bin/env node
 process.stdin.on('data', () => {
@@ -196,7 +197,7 @@ test('CLI setup prints MCP/harness setup guide in markdown and JSON', async (t) 
 
   const markdown = await run(cwd, ['setup', '--harness', 'codex']);
   assert.match(markdown, /# AgentLink Setup Guide/);
-  assert.match(markdown, /- Package: @sruthik\/agentlink 0\.2\.0/);
+  assert.ok(markdown.includes('- Package: @sruthik/agentlink ' + packageVersion));
   assert.match(markdown, /### Codex CLI/);
   assert.match(markdown, /codex mcp add agentlink -- agentlink-mcp/);
   assert.doesNotMatch(markdown, /### Claude Code/);
@@ -209,7 +210,7 @@ test('CLI setup prints MCP/harness setup guide in markdown and JSON', async (t) 
     harnesses: string[];
   };
   assert.equal(json.packageName, '@sruthik/agentlink');
-  assert.equal(json.version, '0.2.0');
+  assert.equal(json.version, packageVersion);
   assert.equal(json.mcpCommand, 'agentlink-mcp');
   assert.deepEqual(json.mcpArgs, []);
   assert.deepEqual(json.harnesses, ['stdio']);
@@ -242,8 +243,13 @@ test('CLI version prints the package version for installed harness checks', asyn
     version: '9.8.7',
   }), 'utf8');
 
-  assert.equal(await run(cwd, ['version']), '0.2.0\n');
-  assert.equal(await run(cwd, ['--version']), '0.2.0\n');
+  assert.equal(await run(cwd, ['version']), packageVersion + '\n');
+  assert.equal(await run(cwd, ['--version']), packageVersion + '\n');
+  const build = JSON.parse(await run(cwd, ['version', '--format', 'json']));
+  assert.equal(build.version, packageVersion);
+  assert.match(build.buildId, /^sha256:[a-f0-9]{64}$/);
+  assert.equal(build.algorithm, 'sha256-runtime-js-v1');
+  assert(build.runtimeFiles > 10);
 });
 
 test('CLI ship-check prints launch readiness in text and JSON', async (t) => {
@@ -660,4 +666,13 @@ test('CLI help and registry-first workflow expose bounded wait without requiring
   assert.match(waited, /Wait outcome: message/);
   assert.match(waited, /wake bounded CLI wait/);
   assert.match(await run(cwd, ['unregister', '--registration', 'reg_cli']), /Agent unregistered: reg_cli/);
+});
+
+test('CLI actor add honors an explicit stable participant ID for peer grants', async (t) => {
+  const cwd = await mkdtemp(join(tmpdir(), 'agentlink-cli-stable-actor-'));
+  t.after(async () => { await rm(cwd, { recursive: true, force: true }); });
+  await run(cwd, ['init']);
+  assert.match(await run(cwd, ['actor', 'add', '--name', 'frontend', '--id', 'frontend']), /selected: frontend frontend/);
+  assert.match(await run(cwd, ['actor', 'show']), /^frontend frontend/);
+  await assert.rejects(run(cwd, ['actor', 'add', '--name', 'duplicate', '--id', 'frontend']), /already exists/);
 });
