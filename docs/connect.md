@@ -40,6 +40,7 @@ Each side gets the same connection ID. Their agents can use:
 agentlink connect send --connection <id> --body 'What interface should we agree on?' --request-id discussion-1
 agentlink connect receive --connection <id>
 agentlink connect wait --connection <id> --after <last-audit-sequence> --timeout-seconds 25
+agentlink connect monitor --connection <id> --after <last-audit-sequence>
 agentlink connect status
 agentlink connect stop --connection <id>
 ```
@@ -52,7 +53,7 @@ Pairing grants communication only. It never grants shell access, repository impl
 
 An existing agent session with terminal access can use the globally installed CLI immediately from its current repository. It does not need MCP configuration to use `connect`.
 
-For agents already connected to AgentLink MCP, the `agentlink_connect` tool offers `invite`, `accept`, `status`, `send`, `receive`, `wait` and `stop` in that same session. It automatically binds the current project and selected local actor; no `--state-root` or MCP restart is needed for pairing. To attach MCP to a new project, use the [one-time setup](setup.md). Installing a package cannot inject new tools into a running client that has not loaded that MCP server.
+For agents already connected to AgentLink MCP, the `agentlink_connect` tool offers `invite`, `accept`, `status`, `send`, `receive`, `wait` and `stop` in that same session. It automatically binds the current project and selected local actor; no `--state-root` or MCP restart is needed for pairing. With user-wide MCP setup (0.3.1+), the agent binds its current workspace through `agentlink_session`; no per-repository installation is required. Project-only setup remains available. See [setup](setup.md). Installing a package cannot inject new tools into a running client that has not loaded that MCP server.
 
 An active agent can send and receive through either interface. Its `wait` operation holds a tool call for up to 25 seconds, returning when a newer audit entry arrives or with `changed: false` on timeout. The agent can continue waiting while the user wants an active conversation; the user does not need to check an inbox manually. Pairing alone does not wake every idle model. Native idle wake still depends on the [harness-specific adapters](network-wake.md); no universal wake claim is made.
 
@@ -61,3 +62,13 @@ An active agent can send and receive through either interface. Its `wait` operat
 Both computers need direct IP reachability (for example the same LAN or an existing private VPN). AgentLink chooses the local interface using the route to the supplied peer IP and uses separate HTTPS ports for bootstrap and authenticated traffic. It does not provide NAT traversal or a hosted relay, use SSH, change firewall rules or configure a browser proxy. A blocked route is reported rather than bypassed.
 
 `agentlink connect status` shows only this project and selected actor's connection summaries, including expiry and helper failure. It does not expose invitation tokens, private certificates/keys, other projects or daemon process details. Use `stop` to request listener shutdown; the fixed expiry also stops it. The pairing bootstrap endpoint never serves ordinary messages; normal traffic requires the existing pinned mutual-TLS transport.
+
+## Resilient waiting and native background consumers (0.3.1+)
+
+`wait` retries transient read failures (timeouts, reset/unreachable connections and temporary HTTP errors) within its original overall deadline. A slow acceptor-side check no longer aborts the entire long wait. Each network check is bounded by the remaining wait budget, and cancellation interrupts an in-flight check. Authorization, certificate/pin, malformed-response and scope errors fail immediately. Sends are never automatically retried.
+
+A normal timeout returns `changed: false` and `connectionCheck: "ok"`. If transient errors exhaust the deadline without a fresh result, it returns `changed: false`, `connectionCheck: "unavailable"` and a failure count, without claiming an authoritative snapshot or a healthy peer. Retry that read/wait later; do not infer delivery or processing.
+
+Pairing returns a structured monitor command, its working directory and consumer instructions. The agent should read pending messages, retain the audit cursor and automatically start that command in its native Monitor/background facility if it can wake the same agent session on stdout. The watcher emits `watching`, `incoming` event references, `retrying` and terminal status lines. It filters the agent's own messages and performs no acknowledgement, reply, shell execution, model invocation or permission renewal. On `incoming`, the native agent receives and processes the actual messages. It ends on owner stop, connection expiry or helper failure. Restart only within the unchanged authorization and use the retained cursor.
+
+A detached shell process alone does not resume an idle model. If native stdout wake is unavailable, active bounded waits remain usable; report that limitation instead of asking the human to repeatedly check an inbox. Existing specialized [wake adapters](network-wake.md) remain available for explicitly configured environments. No competing model worker is silently launched by connection pairing.

@@ -13,6 +13,7 @@ import { resolveActiveParticipant } from '../workspace.js';
 import { initializeNodeIdentity } from './identity.js';
 import { callRemoteAgentLinkTool } from '../mcp/remote-tools.js';
 import { validateNetworkId } from './types.js';
+import { AuthenticatedRequestError, type AuthenticatedRequestOptions } from './a2a.js';
 
 export interface ConnectionRecord {
   version: 1; id: string; workspace: string; actor: string; root: string;
@@ -33,6 +34,8 @@ export const CONNECT_HELP = `AgentLink connection setup (run from your current r
   agentlink connect send --connection <id> --body <text> [--request-id <stable-id>]
   agentlink connect receive --connection <id>
   agentlink connect wait --connection <id> --after <audit-sequence> [--timeout-seconds <1-25>]
+  agentlink connect monitor --connection <id> [--after <audit-sequence>]
+      Stream incoming event references for your agent's native background/Monitor tool until stop/expiry.
   agentlink connect stop --connection <id>
 Communication lasts at most two hours, never renews itself, and does not authorize code execution.
 Both hosts must be directly reachable by IP. No SSH, firewall changes, public directory or relay.
@@ -108,6 +111,64 @@ function publicStatus(c: ConnectionRecord) {
     communicationOnly: true, automaticWake: false, ...(c.error ? { error: c.error } : {}) };
 }
 
+export function connectionConsumerInstructions(id: string, workspace: string, actor: string) {
+  validateNetworkId(id, 'connection');
+  return {
+    nativeMonitorCommand: [process.execPath, fileURLToPath(new URL('../cli.js', import.meta.url)), 'connect', 'monitor', '--connection', id],
+    nativeMonitorCwd: workspace,
+    nativeMonitorEnv: { AGENTLINK_PARTICIPANT_ID: actor },
+    instruction: 'Keep communication active without asking the human to check an inbox. Read pending messages and retain the latest audit sequence. If this harness has a native Monitor/background tool that wakes this same session on stdout, start nativeMonitorCommand in nativeMonitorCwd with nativeMonitorEnv and --after <sequence> using that tool now. On incoming event references, receive, process and reply as needed; do not reply to your own messages or create acknowledgement loops. Re-arm only within the unchanged connection expiry if the native tool deadline ends. A detached shell process alone does not wake a model. If native background wake is unavailable, continue bounded wait calls while active and state that idle wake is unavailable. Do not start a second model worker or renew permissions automatically.',
+    idleWakeVerified: false,
+  };
+}
+
+/** A stdout consumer for an existing native agent, never a competing model worker. */
+export async function monitorConnection(workspace: string, id: string, emit: (event: Record<string, unknown>) => void, after?: number, signal?: AbortSignal): Promise<void> {
+  if (after !== undefined && (!Number.isInteger(after) || after < 0)) throw new Error('monitor after must be nonnegative');
+  let connection = await readConnection(workspace, id);
+  if (publicStatus(connection).status === 'waiting') {
+    emit({ id, status: 'waiting-for-developer', expiresAt: connection.expiresAt });
+    while (publicStatus(connection).status === 'waiting') {
+      try { await pause(250, undefined, { signal }); } catch (error) { if (signal?.aborted) return; throw error; }
+      connection = await readConnection(workspace, id);
+    }
+    // Include all newly paired peer events; no old connection is being replayed.
+    if (after === undefined) after = 0;
+  }
+  const initialStatus = publicStatus(connection).status;
+  if (['stopped', 'expired', 'offline', 'failed'].includes(initialStatus)) { emit({ id, status: initialStatus }); return; }
+  let cursor = after;
+  if (cursor === undefined) {
+    const current = await connectAction(workspace, { action: 'receive', connection: id }, signal);
+    const audit = (current.snapshot as { audit: Array<{ sequence: number }> }).audit;
+    cursor = audit.at(-1)?.sequence ?? 0;
+  }
+  emit({ id, status: 'watching', after: cursor, expiresAt: connection.expiresAt, observationIsNotProcessing: true });
+  let unavailable = false;
+  while (!signal?.aborted) {
+    const state = await readConnection(workspace, id), status = publicStatus(state).status;
+    if (['stopped', 'expired', 'offline', 'failed'].includes(status)) { emit({ id, status }); return; }
+    let response: Record<string, unknown>;
+    try { response = await connectAction(workspace, { action: 'wait', connection: id, after: cursor, timeoutSeconds: 25 }, signal); }
+    catch (error) {
+      if (signal?.aborted) return;
+      const status = publicStatus(await readConnection(workspace, id)).status;
+      if (['stopped', 'expired', 'offline', 'failed'].includes(status)) { emit({ id, status }); return; }
+      throw error;
+    }
+    if (response.connectionCheck === 'unavailable') {
+      if (!unavailable) emit({ id, status: 'retrying', after: cursor });
+      unavailable = true;
+      continue;
+    }
+    if (unavailable) { emit({ id, status: 'watching', after: cursor }); unavailable = false; }
+    const audit = (response.snapshot as { audit: Array<{ sequence: number; actor: { nodeId: string; agentId: string }; operation: { type: string } }> }).audit;
+    const incoming = audit.filter(row => row.sequence > cursor! && row.actor.nodeId === connection.peerNode && row.actor.agentId === connection.peerActor && row.operation.type !== 'read');
+    cursor = Math.max(cursor!, audit.at(-1)?.sequence ?? 0);
+    if (incoming.length) emit({ id, status: 'incoming', after: cursor, sequences: incoming.map(row => row.sequence), observationIsNotProcessing: true });
+  }
+}
+
 async function launch(c: ConnectionRecord, code?: string): Promise<Record<string, unknown>> {
   const entry = fileURLToPath(new URL('./connect-daemon.js', import.meta.url));
   const child = fork(entry, [join(c.root, 'connection.json')], {
@@ -180,19 +241,39 @@ export async function connectAction(workspace: string, args: Record<string, unkn
   const operation = action === 'send'
     ? { type: 'discuss', requestId: args.requestId === undefined ? 'send-' + randomUUID() : validateNetworkId(args.requestId, 'requestId'), content: args.body }
     : { type: 'get', requestId: 'read-' + randomUUID() };
-  const read = () => callRemoteAgentLinkTool('agentlink_collaboration', { peer: 'peer', agent: c.peerActor,
+  const read = (options?: AuthenticatedRequestOptions) => callRemoteAgentLinkTool('agentlink_collaboration', { peer: 'peer', agent: c.peerActor,
     conversationId: c.id, authority: c.role === 'invite' ? 'local' : 'peer', operation },
-  { stateRoot: c.root, agentId: c.actor, workspaceRoot: c.workspace });
-  const deadline = Date.now() + ((args.timeoutSeconds as number | undefined) ?? 25) * 1000;
+  { stateRoot: c.root, agentId: c.actor, workspaceRoot: c.workspace }, options);
+  const deadline = Math.min(Date.parse(c.expiresAt), Date.now() + ((args.timeoutSeconds as number | undefined) ?? 25) * 1000);
+  let transientFailures = 0;
   for (;;) {
     signal?.throwIfAborted();
     if (action === 'wait' && publicStatus(await readConnection(workspace, c.id)).status !== 'connected') throw new Error('Connection stopped or expired while waiting');
-    const response = await read();
+    let response;
+    try {
+      response = await read(action === 'wait' ? { timeoutMs: Math.max(1, Math.min(5000, deadline - Date.now())), signal } : undefined);
+    } catch (error) {
+      signal?.throwIfAborted();
+      if (action !== 'wait' || !isTransientConnectionError(error)) throw error;
+      transientFailures++;
+      if (publicStatus(await readConnection(workspace, c.id)).status !== 'connected') throw new Error('Connection stopped or expired while waiting');
+      if (Date.now() >= deadline) return { id: c.id, changed: false, connectionCheck: 'unavailable', transientFailures, transportIsNotProcessing: true };
+      await pause(Math.min(500, Math.max(1, deadline - Date.now())), undefined, { signal });
+      continue;
+    }
+    signal?.throwIfAborted();
+    if (action === 'wait' && publicStatus(await readConnection(workspace, c.id)).status !== 'connected') throw new Error('Connection stopped or expired while waiting');
     const snapshot = response.structuredContent?.snapshot as { audit: Array<{ sequence: number }> } | undefined;
     const changed = action !== 'wait' || !!snapshot?.audit.some(row => row.sequence > (args.after as number));
-    if (changed || Date.now() >= deadline) return { id: c.id, ...response.structuredContent, ...(action === 'wait' ? { changed } : {}), transportIsNotProcessing: true };
+    if (changed || Date.now() >= deadline) return { id: c.id, ...response.structuredContent, ...(action === 'wait' ? { changed, connectionCheck: 'ok', transientFailures } : {}), transportIsNotProcessing: true };
     await pause(Math.min(500, Math.max(1, deadline - Date.now())), undefined, { signal });
   }
+}
+
+function isTransientConnectionError(error: unknown): boolean {
+  if (error instanceof AuthenticatedRequestError) return error.statusCode === 408 || error.statusCode === 429 || error.statusCode >= 500;
+  const code = (error as NodeJS.ErrnoException | undefined)?.code;
+  return typeof code === 'string' && ['ETIMEDOUT', 'ECONNRESET', 'ECONNREFUSED', 'EHOSTUNREACH', 'ENETUNREACH', 'EAI_AGAIN', 'EPIPE'].includes(code);
 }
 
 export async function runConnectCli(args: string[], workspace: string, output: { log(value: string): void }) {
@@ -206,6 +287,15 @@ export async function runConnectCli(args: string[], workspace: string, output: {
     const key = name === 'request-id' ? 'requestId' : name === 'timeout-seconds' ? 'timeoutSeconds' : name;
     if (key in input) throw new Error('Duplicate connection option');
     input[key] = ['after','timeoutSeconds'].includes(key) ? Number(args[i + 1]) : args[i + 1];
+  }
+  if (input.action === 'monitor') {
+    if (Object.keys(input).some(k => !['action', 'connection', 'after'].includes(k))) throw new Error('monitor requires connection and optional after');
+    const controller = new AbortController();
+    const stop = () => controller.abort();
+    process.once('SIGTERM', stop); process.once('SIGINT', stop);
+    try { await monitorConnection(workspace, validateNetworkId(input.connection, 'connection'), event => output.log(JSON.stringify(event)), input.after as number | undefined, controller.signal); }
+    finally { process.removeListener('SIGTERM', stop); process.removeListener('SIGINT', stop); }
+    return;
   }
   output.log(JSON.stringify(await connectAction(workspace, input)));
 }

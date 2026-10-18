@@ -116,8 +116,8 @@ Usage:
       Print a compact repo fingerprint for agent handoffs without source content
   agentlink doctor [--format <text|json>]
       Check local AgentLink prerequisites, workspace state, tmux visibility, and MCP build output
-  agentlink setup [--harness <stdio|claude-code|codex|copilot|opencode|gemini|all>] [--format <markdown|json>] [--config|--write] [--check] [--state-root <absolute-path>] [--wake-config <absolute-path>]
-      Print setup instructions; --write configures this project, --check verifies MCP startup
+  agentlink setup [--harness <stdio|claude-code|codex|copilot|opencode|gemini|all>] [--scope <user|project>] [--format <markdown|json>] [--config|--write] [--check] [--state-root <absolute-path>] [--wake-config <absolute-path>]
+      Print setup instructions; --scope user registers across repos, --check verifies MCP startup
   agentlink demo --peer <repo-path> [--topic <topic>] [--format <markdown|json>]
       Run a deterministic two-repo contract negotiation demo using the local bus
   agentlink ship-check [--format <text|json>]
@@ -568,16 +568,17 @@ export async function runCli(
   }
 
   if (command === 'setup') {
-    rejectUnknownOptions(options, ['harness', 'format', 'write', 'check', 'config', 'state-root', 'wake-config']);
+    rejectUnknownOptions(options, ['harness', 'format', 'write', 'check', 'config', 'state-root', 'wake-config', 'scope']);
     if (positionals.length > 0) throw new UsageError('Usage: agentlink setup [--harness <stdio|claude-code|codex|copilot|opencode|gemini|all>] [--format <markdown|json>]');
     const format = options.format ?? 'markdown';
     if (!['markdown', 'json'].includes(format)) throw new UsageError('--format must be markdown or json');
     const harness = options.harness === undefined || options.harness === 'all'
       ? 'all'
       : parseSetupHarness(options.harness);
-    if (options.write || options.check || options.config || options['state-root'] || options['wake-config']) {
+    if (options.scope && options.scope !== 'user' && options.scope !== 'project') throw new UsageError('--scope must be user or project');
+    if (options.write || options.check || options.config || options['state-root'] || options['wake-config'] || options.scope) {
       if (harness === 'all') throw new UsageError('Choose one --harness for project setup: claude-code, codex, copilot, gemini, opencode or stdio');
-      const plan = await planSetup(cwd, harness, options['state-root'], options['wake-config']);
+      const plan = await planSetup(cwd, harness, options['state-root'], options['wake-config'], options.scope as 'user' | 'project' | undefined);
       const result = {
         ...plan,
         ...(options.write ? { installation: await writeSetup(plan) } : {}),

@@ -4,32 +4,34 @@ For agent-operated installation, paste the [README installation prompt](../READM
 
 Project configuration flags `--write`, `--config` and `--check` are available in version 0.3.0+.
 
-Requires Node.js 20+ and an MCP-capable coding agent. In each project:
+Requires Node.js 20+. Terminal-capable agents can use the CLI immediately. For MCP, the recommended 0.3.1+ setup is once per user/harness:
 
 ```sh
 npm install -g @sruthik/agentlink
-agentlink setup --harness copilot --write --check
+agentlink setup --harness copilot --scope user --write --check
 copilot
 ```
 
 Choose your agent instead of `copilot`:
 
-| Harness | Project configuration | Next step |
+| Harness | User configuration | Optional project configuration |
 | --- | --- | --- |
-| `copilot` | `.mcp.json` | Start Copilot in the trusted repo; inspect `/mcp` |
-| `claude-code` | `.mcp.json` | Start Claude in the repo; approve project MCP loading |
-| `codex` | `.codex/config.toml` | Start Codex in the trusted repo; inspect MCP tools |
-| `gemini` | `.gemini/settings.json` | Start Gemini in the repo; inspect `/mcp` |
-| `opencode` | `opencode.json` | Start OpenCode in the repo; inspect MCP status |
-| `stdio` | Definition printed only | Copy the definition into your MCP client |
+| `claude-code` | `~/.claude.json` | `.mcp.json` |
+| `codex` | `$CODEX_HOME/config.toml` or `~/.codex/config.toml` | `.codex/config.toml` |
+| `copilot` | `$COPILOT_HOME/mcp-config.json` or `~/.copilot/mcp-config.json` | `.mcp.json` |
+| `gemini` | `~/.gemini/settings.json` | `.gemini/settings.json` |
+| `opencode` | `$XDG_CONFIG_HOME/opencode/opencode.json` or `~/.config/opencode/opencode.json` | `opencode.json` |
+| `stdio` | Definition printed for the client's user configuration | Definition printed only |
 
-Preview without writing: `agentlink setup --harness copilot --config`. Any client supporting local stdio MCP can use `--harness stdio --config`; clients use different configuration schemas, so wrap the server definition as your client requires. Agents without MCP can use the standalone CLI.
+Preview: `agentlink setup --harness copilot --scope user --config`. Use `--scope project` to intentionally configure one fixed repository. Omitting scope keeps the original project mode for compatibility. Version 0.3.0 supports project setup; version 0.3.1 adds user scope.
 
-Setup uses absolute paths to the installed Node runtime and AgentLink launcher, bound to this exact project. It does not rely on an IDE's PATH or startup directory. Re-run preview after moving the repo or changing/removing the Node/package installation. Prefer a persistent installation over an evictable `npx` cache for saved configuration.
+User-wide entries use absolute runtime paths plus `--session`, without a fixed repo path. The agent uses the advertised `agentlink_session` tool to select its actual working directory automatically at first use. Workspace/actor binding stays pinned to that MCP process, so simultaneous independent sessions stay isolated. It does not infer a repository from the harness's config directory or discover unrelated workspaces. If a host shares one MCP process across projects, use separate server instances or the CLI for those projects. Reconnect existing sessions once to load newly installed tools; no per-repo installation is needed.
 
-The writer merges only the AgentLink entry, preserves other configuration, backs up original bytes before a merge, refuses symlinks/malformed or oversized files, and never replaces a different existing AgentLink entry. Existing Codex TOML, OpenCode JSONC and bare Copilot maps require an explicit merge of the printed entry to preserve unrelated settings/comments. Running setup again with the same config is a no-op.
+Project entries retain the fixed absolute workspace launcher. Re-run project setup after moving that repo. For both scopes, keep the installed Node/package paths available and use a persistent install instead of an evictable `npx` cache.
 
-`--check` performs a real MCP initialize/tools-list exchange without a coding-agent account or model call. Starting MCP creates local workspace/actor metadata. It proves the installed server starts and advertises tools; verify native tool loading in your actual agent next. It does not bypass folder trust, tool approvals, enterprise allowlists or login. MCP support alone does not provide idle wake.
+The writer merges only AgentLink, preserves unrelated configuration, backs up original bytes, refuses symlinks/malformed or oversized files, and never replaces a conflicting entry. Existing Codex TOML, OpenCode JSONC and bare Copilot maps require an explicit merge. Custom `CLAUDE_CONFIG_DIR` requires the native Claude user-scope command with the generated stdio definition rather than guessing a config path. Client-specific command-line config overrides must also be handled using that client's documented config location. Existing project entries can shadow global entries; inspect and migrate only the relevant AgentLink entry deliberately.
+
+`--check` performs a real MCP initialize/tools-list exchange without a coding-agent account or model call. Project MCP startup creates workspace/actor metadata; user-wide startup defers this until session binding. It proves the installed server starts and advertises tools; verify native tool loading in your actual agent next. It does not bypass folder trust, tool approvals, enterprise allowlists or login. MCP support alone does not provide idle wake.
 
 ## Two machines
 
@@ -47,6 +49,8 @@ For an already authorized native wake enrollment, add `--wake-config /absolute/p
 
 ## Troubleshooting
 
-If configuration conflicts, run `--config` and merge the proposed entry deliberately. For startup failure check the absolute Node/package/project paths, then `agentlink doctor` (local) or `agentlink network doctor --state-root /absolute/private/node-state` (network). Inspect the agent's native MCP status and trust policy. Transport receipt, MCP startup, native processing and automatic wake are distinct checks.
+If configuration conflicts, run `--config` and merge the proposed entry deliberately. For startup failure check the absolute Node/package/project paths, then `agentlink doctor` (local) or `agentlink network doctor --state-root /absolute/private/node-state` (network). Inspect the agent's native MCP status and trust policy. Transport receipt, MCP startup, native processing and automatic wake are distinct checks. Connection consumers can be started by the agent through a compatible native Monitor/background tool; no universal idle-wake claim is implied.
 
 Formats checked against [Copilot CLI docs](https://docs.github.com/en/copilot/how-tos/copilot-cli/customize-copilot/add-mcp-servers), [Codex MCP docs](https://developers.openai.com/codex/mcp/), [Gemini MCP docs](https://geminicli.com/docs/tools/mcp-server/), and [OpenCode MCP docs](https://opencode.ai/docs/mcp-servers/). Generated configuration and handshake tests cover these definitions. Actual native-client acceptance is recorded separately and must not be inferred for every listed harness.
+
+User-scope references: [Claude scopes](https://code.claude.com/docs/en/mcp#user-scope), [Copilot configuration directory](https://docs.github.com/en/copilot/reference/copilot-cli-reference/cli-config-dir-reference), [Gemini user configuration](https://geminicli.com/docs/reference/configuration/) and [OpenCode global configuration](https://opencode.ai/docs/config/).

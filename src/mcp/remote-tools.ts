@@ -6,6 +6,7 @@ import { discoverA2AAgent, sendA2AMessage } from '../network/a2a.js';
 import { listPairedPeers, requireAgentExposure, resolvePairedPeer } from '../network/config.js';
 import { validateNetworkId } from '../network/types.js';
 import type { McpToolDefinition, McpToolResult } from './tools.js';
+import type { AuthenticatedRequestOptions } from '../network/a2a.js';
 
 export interface RemoteMcpBinding {
   remoteAgentId?: string;
@@ -106,6 +107,7 @@ export async function callRemoteAgentLinkTool(
   name: string,
   args: Arguments = {},
   bindingValue?: RemoteMcpBinding,
+  requestOptions?: AuthenticatedRequestOptions,
 ): Promise<McpToolResult> {
   const binding = requireBinding(bindingValue);
   if (name === 'agentlink_collaboration') {
@@ -118,7 +120,7 @@ export async function callRemoteAgentLinkTool(
     if (args.cached !== undefined && typeof args.cached !== 'boolean') throw new Error('cached must be boolean');
     if (args.cached && operation.type !== 'get') throw new Error('Cached state cannot authorize mutations');
     const response = args.cached ? await readCachedCollaboration(binding, target)
-      : await callCollaboration(binding, target, { ...operation, requestId: operation.requestId ?? newCollaborationRequestId() });
+      : await callCollaboration(binding, target, { ...operation, requestId: operation.requestId ?? newCollaborationRequestId() }, requestOptions);
     return result(response.cached ? 'Known cached authority state; it may be stale and cannot establish acceptance.'
       : 'Authoritative collaboration state. Agent approvals are not human permission; processing evidence is recipient attestation.', response as unknown as Record<string, unknown>);
   }

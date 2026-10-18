@@ -1,4 +1,8 @@
-# Automatic network harness wake (experimental)
+# Native agent consumers and automatic wake
+
+For ordinary code pairing in 0.3.1+, no separate low-level wake enrollment is needed to use the agent's native Monitor/background consumer. Pairing returns a `connect monitor --connection <id>` command and working directory. The agent should read pending messages, retain the audit cursor and automatically start the command with `--after <cursor>` using a native facility that wakes the same session on stdout. The watcher emits only scoped event references and terminal status, filters own messages, retries transient reads and stops at the existing expiry. It does not invoke a model or prove native consumption. Without native stdout wake, active bounded waits remain the fallback. See [connection consumers](connect.md#resilient-waiting-and-native-background-consumers-031).
+
+The following specialized adapters are the advanced enrollment path. They are not a prerequisite for the ordinary connection monitor.
 
 An authenticated message needs a consumer: an MCP tool connection alone does not wake an idle model. AgentLink now provides an explicitly enrolled Codex supervisor and an interactive Claude MCP channel. Enrollment is finite, scoped to the selected local actor/workspace, pinned peer identities, remote actor, conversation IDs and authority. It does not grant implementation permission.
 
@@ -59,7 +63,7 @@ Monitor receives one JSON line for each pending event. On each event, Claude mus
 
 Budget exhaustion emits a stdout JSON line with `status: budget-exhausted` and used/maximum/remaining turns, then exits nonzero with an actionable stderr message. Expiry emits `status: expired` and its timestamp before the failure exit. Native Monitor can notify the agent from these stdout lines without shell redirection. Neither condition renews access or replays events. An owner stop emits a `status: stopped` JSON line and exits successfully. `network doctor` reports used, maximum and remaining turns. Enrollment excludes existing events by default; `--replay-existing true` requires an explicit owner choice.
 
-Claude Monitor has a finite native deadline (maximum 30 minutes interactively, 10 minutes in `-p`). Instruct Claude to renew Monitor after its deadline until the enrollment expires or the owner stops it; a resumed session must start Monitor again. Native model access and Monitor availability are required. The local test CLI currently needs `/login`, so real Claude consumption remains an owner-operated MacBook acceptance gate. [Claude Monitor documentation](https://code.claude.com/docs/en/tools-reference#monitor-tool).
+Claude Monitor has a finite native deadline (maximum 30 minutes interactively, 10 minutes in `-p`). Instruct Claude to renew Monitor after its deadline until the enrollment expires or the owner stops it; a resumed session must start Monitor again. Native model access and Monitor availability are required. Actual Claude model consumption remains a separate physical-host acceptance gate. [Claude Monitor documentation](https://code.claude.com/docs/en/tools-reference#monitor-tool).
 
 ## OpenCode existing native session
 

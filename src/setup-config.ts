@@ -4,17 +4,21 @@ import { lstat, mkdir, readFile, realpath } from 'node:fs/promises';
 import { dirname, isAbsolute, join, relative, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createInterface } from 'node:readline';
+import { homedir } from 'node:os';
 import { assertNotSymlink, atomicWriteFile, withFileLock } from './atomic.js';
 import type { SetupHarness } from './setup.js';
 
 export interface SetupPlan {
   harness: SetupHarness; workspace: string; name: string; configPath: string | null;
+  scope: 'project' | 'user';
   command: string; args: string[]; config: Record<string, unknown> | string;
   verification: string; next: string[];
 }
-export async function planSetup(cwd: string, harness: SetupHarness, stateRoot?: string, wakeConfig?: string): Promise<SetupPlan> {
+export async function planSetup(cwd: string, harness: SetupHarness, stateRoot?: string, wakeConfig?: string, scope: 'project' | 'user' = 'project', userHome = homedir(), configEnv: NodeJS.ProcessEnv = process.env): Promise<SetupPlan> {
+  if (scope !== 'project' && scope !== 'user') throw new Error('--scope must be project or user');
+  if (scope === 'user' && (stateRoot || wakeConfig)) throw new Error('User-wide setup cannot pin a project network state root or wake enrollment; use project scope for these');
   const workspace = await realpath(cwd);
-  const args = [fileURLToPath(new URL('./mcp/launch.js', import.meta.url)), '--workspace', workspace];
+  const args = [fileURLToPath(new URL('./mcp/launch.js', import.meta.url)), ...(scope === 'user' ? ['--session'] : ['--workspace', workspace])];
   if (stateRoot) {
     if (!isAbsolute(stateRoot)) throw new Error('--state-root must be absolute');
     const root = await realpath(stateRoot), rel = relative(workspace, root);
@@ -36,10 +40,25 @@ export async function planSetup(cwd: string, harness: SetupHarness, stateRoot?: 
     configPath = join(workspace, '.codex/config.toml');
     config = `[mcp_servers.${name}]\ncommand = ${JSON.stringify(command)}\nargs = ${JSON.stringify(args)}\n`;
   }
+  if (scope === 'user') {
+    const base = (value: string | undefined, fallback: string): string => {
+      const directory = value || fallback;
+      if (!isAbsolute(directory)) throw new Error('Harness config directory must be absolute');
+      return directory;
+    };
+    if (harness === 'claude-code') {
+      if (configEnv.CLAUDE_CONFIG_DIR) throw new Error('Custom CLAUDE_CONFIG_DIR: use the native claude mcp add --scope user with the stdio preview; setup will not guess a global config path');
+      configPath = join(userHome, '.claude.json');
+    }
+    if (harness === 'codex') configPath = join(base(configEnv.CODEX_HOME, join(userHome, '.codex')), 'config.toml');
+    if (harness === 'copilot') configPath = join(base(configEnv.COPILOT_HOME, join(userHome, '.copilot')), 'mcp-config.json');
+    if (harness === 'gemini') configPath = join(userHome, '.gemini/settings.json');
+    if (harness === 'opencode') configPath = join(base(configEnv.XDG_CONFIG_HOME, join(userHome, '.config')), 'opencode/opencode.json');
+  }
   if (harness === 'stdio') configPath = null;
-  return { harness, workspace, name, configPath, command, args, config,
+  return { harness, workspace, scope, name, configPath, command, args, config,
     verification: 'Configuration only; use --check for a real MCP initialize/tools-list check. Native model use and automatic wake are separate acceptance gates.',
-    next: ['Start/reconnect your coding agent in this project and approve its normal project/MCP trust prompt.', 'Ask the agent to list AgentLink tools and conversations. MCP approval and organization policies still apply.', 'For two-host use, explicitly pair verified public identities and grant scoped access; setup never creates grants, renews expiry or starts a daemon.'] };
+    next: [scope === 'user' ? 'Reconnect the harness once. AgentLink is available across repositories; each new MCP session uses agentlink_session to bind its current workspace before any project operation.' : 'Start/reconnect your coding agent in this project and approve its normal project/MCP trust prompt.', 'Ask the agent to list AgentLink tools and conversations. MCP approval and organization policies still apply.', 'For two-host use, ask the agent to connect by code. Setup never creates grants, renews expiry or starts a daemon.'] };
 }
 function object(value: unknown): value is Record<string, unknown> { return !!value && typeof value === 'object' && !Array.isArray(value); }
 export async function writeSetup(plan: SetupPlan): Promise<{ status: string; configPath: string; backup?: string }> {

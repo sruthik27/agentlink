@@ -75,3 +75,30 @@ test('setup preview is nonmutating; CLI write/check performs a real MCP handshak
   await assert.rejects(planSetup(root, 'stdio', hiddenChild), /outside/);
   await assert.rejects(planSetup(root, 'stdio', undefined, '/tmp/wake'), /requires/);
 });
+
+test('user-wide setup writes outside projects and starts without assuming a workspace', async t => {
+  const root = await mkdtemp(join(tmpdir(), 'agentlink-setup-user-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const repo = join(root, 'repo'); await mkdir(repo);
+  const paths = { 'claude-code': '.claude.json', codex: '.codex/config.toml', copilot: '.copilot/mcp-config.json', gemini: '.gemini/settings.json', opencode: '.config/opencode/opencode.json' };
+  for (const harness of ['claude-code', 'codex', 'copilot', 'gemini', 'opencode'] as const) {
+    const home = join(root, harness); await mkdir(home);
+    const plan = await planSetup(repo, harness, undefined, undefined, 'user', home, {});
+    assert.equal(plan.configPath, join(home, paths[harness]));
+    assert.deepEqual(plan.args.slice(1), ['--session']);
+    await writeSetup(plan);
+    assert.equal((await writeSetup(plan)).status, 'already-configured');
+    assert.equal((await checkSetup({ ...plan, workspace: home })).status, 'mcp-handshake-passed');
+    assert(!(await readdir(home)).includes('.agentlink'));
+    assert.deepEqual(await readdir(repo), []);
+  }
+  const codex = await planSetup(repo, 'codex', undefined, undefined, 'user', root, { CODEX_HOME: join(root, 'custom-codex') });
+  assert.equal(codex.configPath, join(root, 'custom-codex/config.toml'));
+  await assert.rejects(planSetup(repo, 'codex', root, undefined, 'user'), /cannot pin/);
+  await assert.rejects(planSetup(repo, 'stdio', undefined, undefined, 'invalid' as 'user'), /scope/);
+  await assert.rejects(planSetup(repo, 'claude-code', undefined, undefined, 'user', root, { CLAUDE_CONFIG_DIR: root }), /will not guess/);
+  const lines: string[] = [];
+  await runCli(['setup', '--harness', 'stdio', '--scope', 'user', '--config'], repo, { log: s => lines.push(s), error: s => { throw new Error(s); } });
+  assert.equal(JSON.parse(lines[0]).scope, 'user');
+  await assert.rejects(runCli(['setup', '--harness', 'stdio', '--scope', 'invalid'], repo), /scope/);
+});

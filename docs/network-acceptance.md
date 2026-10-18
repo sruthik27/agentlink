@@ -1,4 +1,14 @@
-# Verification status — AgentLink 0.3.0
+# Verification status — AgentLink
+
+## 0.3.1 verification
+
+The 0.3.1 release candidate passed **187/187 tests** and all local release gates, including installed foundation/bridge/collaboration, project and user setup handshakes for five harnesses, installed pairing, wake/adapter protocols and archive consistency. Focused setup/session/wait regressions also passed on Node 20 and 24.
+
+Runtime identity: `sha256:2348c30eb649d6fb01f2f15c3a0f4d2a1ca98333be8e87ff42798d27f1774154` (42 runtime JavaScript files). Candidate archive SHA-256: `ec92aae3c71e5d17560dd26c502f7b21861061f64e9c9b49a7d122a4bb2e3d84`.
+
+Regression evidence includes a real five-second delayed authenticated acceptor-side read followed by retry/recovery, deadline exhaustion without a fabricated snapshot, in-flight cancellation, immediate authorization/malformed-response failure, no automatic send retry, monitor event filtering/stop, and isolated simultaneous globally configured MCP sessions. Native Monitor stdout protocol is locally tested; actual model wake and physical-host acceptance of this runtime remain **OPEN**.
+
+## Published 0.3.0 baseline
 
 Version 0.3.0 is published on npm. This record separates local engineering checks from native-agent and physical-host acceptance.
 
