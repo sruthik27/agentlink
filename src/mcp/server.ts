@@ -9,7 +9,37 @@ stdout.on('error', (error: NodeJS.ErrnoException) => {
 import { dirname, join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { AGENTLINK_MCP_TOOLS, callAgentLinkTool } from './tools.js';
+import {
+  AGENTLINK_REMOTE_MCP_TOOLS,
+  callRemoteAgentLinkTool,
+  isRemoteTool,
+  type RemoteMcpBinding,
+} from './remote-tools.js';
 import { initializeWorkspaceIdentity, resolveActiveParticipant } from '../workspace.js';
+import { CONNECT_TOOL, callConnectTool } from './connect-tools.js';
+
+import { NetworkWakeConnection, readNetworkWakeConfig, networkWakeInstructions, withNetworkWakeDispatch } from '../network/wake.js';
+
+let wakeConnection: NetworkWakeConnection | undefined;
+let wakeTimer: NodeJS.Timeout | undefined;
+let channelPolling = false;
+const wakeNextTool = { name: 'agentlink_wake_next', description: 'Bind the next owner-enrolled Monitor event or dispatched OpenCode event before reading it.', inputSchema: { type: 'object', properties: { eventId: { type: 'string' } }, additionalProperties: false } };
+const wakeAckTool = { name: 'agentlink_wake_ack', description: 'Acknowledge only the exact wake event observed through this MCP connection; this is not task processing.', inputSchema: { type: 'object', properties: { eventId: { type: 'string' }, outcome: { type: 'string', enum: ['observed', 'blocked'] }, summary: { type: 'string', maxLength: 512 } }, required: ['eventId', 'outcome', 'summary'], additionalProperties: false } };
+
+async function pollWakeChannel(): Promise<void> {
+  if (!wakeConnection || channelPolling) return;
+  const connection = wakeConnection; channelPolling = true; let attempted = false;
+  try {
+    const event = await connection.next();
+    if (event) await withNetworkWakeDispatch(connection.config, event, () => {
+      attempted = true; connection.markDispatched();
+      send({ jsonrpc: '2.0', method: 'notifications/claude/channel', params: { content: networkWakeInstructions(connection.config, event), meta: { event_id: event.id, conversation_id: event.conversationId, sender_node: connection.config.peerNodeId } } });
+    });
+  } catch (error) {
+    await connection.dispatchFailed((error as Error).message, attempted);
+    process.stderr.write(`AgentLink channel paused: ${(error as Error).message.slice(0, 256)}\n`);
+  } finally { channelPolling = false; }
+}
 
 type JsonRpcId = string | number | null;
 
@@ -24,6 +54,7 @@ type StdioOutputMode = 'content-length' | 'jsonl';
 
 let outputMode: StdioOutputMode = 'content-length';
 const activeRequests = new Map<string, AbortController>();
+let remoteBinding: RemoteMcpBinding | undefined;
 
 function requestKey(id: JsonRpcId | undefined): string | undefined {
   return id === undefined ? undefined : JSON.stringify(id);
@@ -85,14 +116,15 @@ async function handleRequest(request: JsonRpcRequest): Promise<void> {
     if (request.method === 'initialize') {
       sendResult(request.id, {
         protocolVersion: '2024-11-05',
-        capabilities: { tools: {} },
+        capabilities: { tools: {}, ...(wakeConnection?.config.harness === 'claude-channel' ? { experimental: { 'claude/channel': {} } } : {}) },
+        ...(wakeConnection ? { instructions: networkWakeInstructions(wakeConnection.config) } : {}),
         serverInfo: { name: 'agentlink-mcp', version: await readPackageVersion() },
       });
       return;
     }
 
     if (request.method === 'tools/list') {
-      sendResult(request.id, { tools: AGENTLINK_MCP_TOOLS });
+      sendResult(request.id, { tools: [...AGENTLINK_MCP_TOOLS, CONNECT_TOOL, ...AGENTLINK_REMOTE_MCP_TOOLS, ...(wakeConnection ? [wakeAckTool, wakeNextTool] : [])] });
       return;
     }
 
@@ -104,11 +136,36 @@ async function handleRequest(request: JsonRpcRequest): Promise<void> {
       if (args !== undefined && (typeof args !== 'object' || args === null || Array.isArray(args))) {
         throw new Error('tools/call params.arguments must be an object');
       }
-      sendResult(request.id, await callAgentLinkTool(toolName, args as Record<string, unknown> | undefined, process.cwd(), { signal: controller?.signal }));
+      if (toolName === 'agentlink_wake_next') {
+        if (!wakeConnection) throw new Error('No enrolled wake connection');
+        const a = (args ?? {}) as Record<string, unknown>;
+        if (Object.keys(a).some(k => k !== 'eventId') || (a.eventId !== undefined && typeof a.eventId !== 'string')) throw new Error('Invalid wake next arguments');
+        const e = await wakeConnection.nextTool(a.eventId as string | undefined);
+        sendResult(request.id, { content: [{ type: 'text', text: e ? networkWakeInstructions(wakeConnection.config, e) : 'No pending wake events.' }], structuredContent: { event: e ?? null } }); return;
+      }
+      if (toolName === 'agentlink_wake_ack') {
+        if (!wakeConnection) throw new Error('No locally enrolled wake connection');
+        await wakeConnection.ack((args ?? {}) as Record<string, unknown>);
+        sendResult(request.id, { content: [{ type: 'text', text: 'Wake observation acknowledged; task processing is separate.' }] }); return;
+      }
+      if (wakeConnection) await wakeConnection.authorizeTool(toolName, (args ?? {}) as Record<string, unknown>);
+      const result = toolName === CONNECT_TOOL.name
+        ? await callConnectTool((args ?? {}) as Record<string, unknown>, process.cwd(), controller?.signal)
+        : isRemoteTool(toolName)
+        ? await callRemoteAgentLinkTool(toolName, args as Record<string, unknown> | undefined, wakeConnection && remoteBinding ? { ...remoteBinding, remoteAgentId: wakeConnection.config.remoteAgentId } : remoteBinding)
+        : await callAgentLinkTool(toolName, args as Record<string, unknown> | undefined, process.cwd(), { signal: controller?.signal });
+      if (wakeConnection) await wakeConnection.observe(toolName, (args ?? {}) as Record<string, unknown>, result);
+      sendResult(request.id, result);
       return;
     }
 
-    if (request.method === 'notifications/initialized') return;
+    if (request.method === 'notifications/initialized') {
+      if (wakeConnection?.config.harness === 'claude-channel' && !wakeTimer) {
+        wakeTimer = setInterval(() => { void pollWakeChannel(); }, wakeConnection.config.pollMs);
+        void pollWakeChannel();
+      }
+      return;
+    }
 
     sendError(request.id, -32601, `Method not found: ${request.method}`);
   } catch (error) {
@@ -138,6 +195,21 @@ export async function serveStdio(): Promise<void> {
   await initializeWorkspaceIdentity(process.cwd());
   const startupActor = await resolveActiveParticipant(process.cwd());
   process.env.AGENTLINK_PARTICIPANT_ID = startupActor.participantId;
+  const configuredNetworkRoot = process.env.AGENTLINK_NETWORK_STATE_ROOT;
+  remoteBinding = configuredNetworkRoot
+    ? { stateRoot: await realpath(configuredNetworkRoot), agentId: startupActor.participantId, workspaceRoot: await realpath(process.cwd()) }
+    : undefined;
+  const wakePath = process.env.AGENTLINK_WAKE_CONFIG;
+  if (wakePath) {
+    const config = await readNetworkWakeConfig(wakePath);
+    if (!remoteBinding || config.stateRoot !== remoteBinding.stateRoot || config.workspaceRoot !== remoteBinding.workspaceRoot || config.agentId !== remoteBinding.agentId) throw new Error('Wake enrollment does not match this MCP workspace/actor');
+    wakeConnection = new NetworkWakeConnection(config);
+    if (config.harness === 'codex') {
+      if (!process.env.AGENTLINK_WAKE_JOB_ID) throw new Error('Codex wake job binding required');
+      await wakeConnection.attach(process.env.AGENTLINK_WAKE_JOB_ID);
+    }
+  }
+  stdin.on('end', () => { if (wakeTimer) clearInterval(wakeTimer); });
   let buffer = Buffer.alloc(0);
 
   stdin.on('data', (chunk: Buffer) => {

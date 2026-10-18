@@ -1,58 +1,133 @@
-# AgentLink — MCP coordination for coding agents
+# AgentLink — connect your coding agents
 
-[Website & quickstart](https://sruthik27.github.io/agentlink/) · [npm package](https://www.npmjs.com/package/@sruthik/agentlink) · [Releases](https://github.com/sruthik27/agentlink/releases)
+[Installation prompt](#let-your-agent-set-it-up) · [npm](https://www.npmjs.com/package/@sruthik/agentlink) · [Website](https://sruthik27.github.io/agentlink/) · [0.3.0 release notes](release-notes-v0.3.0.md)
 
-AgentLink by **Sruthik Issac** is published as **`@sruthik/agentlink`** on npm.
+Let coding agents in separate repositories and on different computers communicate, negotiate interfaces, and keep durable agreements. Use your existing coding agent through the CLI or MCP.
 
-> **0.2.0 reliability release:** locally verified with 111 passing tests, installed-package MCP checks, 50×8-process lock contention, real supervised Codex wake/restart/acknowledgement, and real OpenCode proposal/review/approval/sync/session-resume/acknowledgement. Automatic wake is limited to explicitly enrolled supervised/headless Codex—not arbitrary GUI, IDE or Claude sessions. Distribution availability is tracked separately on [npm](https://www.npmjs.com/package/@sruthik/agentlink) and [GitHub Releases](https://github.com/sruthik27/agentlink/releases). [Release notes](release-notes-v0.2.0.md). GitHub Actions tests remain account-billing blocked; these are local, installed-package and actual-client results, not a CI PASS.
+**Install → ask your agent to connect → share one code.**
 
-AgentLink is a local-first coordination layer for multiple coding agents — Claude Code, Codex CLI, GitHub Copilot CLI, OpenCode, Gemini CLI, and similar harnesses — working across related repositories.
-
-The product goal is not generic agent chat. The wedge is **cross-repo contract negotiation**: agents in separate Claude Code/Codex/OpenCode sessions exchange compact structured messages, agree on interface/behavior changes, and generate durable `CONTRACT.md` handoff files each repo can implement against.
+Version **0.3.0** is published on npm. Direct connections require a shared LAN or existing private VPN, Node.js 20+ and OpenSSL. Physical-host acceptance of the new connection flow remains pending; see [verification status](docs/network-acceptance.md).
 
 ## Install
 
-Install once, then add AgentLink to your coding agent app as an MCP server:
+### Let your agent set it up
 
-```bash
-npm install -g @sruthik/agentlink
+Copy this prompt into your coding agent in the repository where you want to use AgentLink. It installs the CLI, configures MCP for the current harness when supported, and checks the result. Requires an agent with terminal and configuration-file access; restricted clients may need an owner/admin step.
+
+```text
+Install and configure AgentLink for me in this repository. Complete the setup
+yourself using terminal and file tools, and preserve my code and existing settings.
+
+1. Identify this coding harness and the current repository. Check Node.js (20+)
+   and npm. Install the official package with:
+   npm install -g @sruthik/agentlink@latest --prefer-online
+   If global installation is not writable, use a persistent user-owned npm prefix
+   and resolve its executable paths; do not use sudo or save an ephemeral npx path
+   in MCP config. If prerequisites cannot be installed within existing permissions,
+   report the one necessary owner action.
+2. Verify the installed package using `agentlink version --format json` and
+   `agentlink connect help`. Resolve PATH conflicts so you use @sruthik/agentlink
+   version 0.3.0 or newer, not a different package named agentlink.
+3. Configure MCP for THIS harness. Read `agentlink setup` help, then preview with
+   `agentlink setup --harness <harness> --config`. Supported profiles are
+   claude-code, codex, copilot, gemini and opencode. Apply with --write --check.
+   If an existing config needs an explicit merge, back it up and merge only the
+   AgentLink entry. Preserve all other settings, comments and MCP servers; verify
+   the diff. Reuse a working existing entry instead of creating a duplicate.
+   Prefer project scope. For another MCP client, use the stdio profile and its
+   current official configuration docs. Do not guess the schema or configure
+   other installed harnesses. An agent without local stdio MCP can use the CLI.
+4. Check MCP startup with --check. If this session exposes AgentLink MCP tools,
+   make a read-only status/list call. Otherwise use the CLI now and tell me the
+   exact reconnect/restart or trust step needed to load MCP. Do not claim that a
+   server handshake proves this session loaded the tools. Never end my session
+   or bypass its approval/organization policy.
+5. Report the installed version, config path/scope, verification results, and any
+   remaining action briefly. Explain that the CLI is available across repos;
+   project MCP setup must be repeated for each repo. Stop when installation is
+   ready. Do not create connections or start background listeners yet.
+
+After setup I should be able to say: "Use AgentLink to connect to Alice at
+192.168.1.11 and give me the connection code", or "Accept this AgentLink code:
+AL1-...". Use `agentlink connect` help or the loaded agentlink_connect tool for
+that later request. Pair only on my direct instruction; share codes privately.
+Pairing authorizes finite communication, not remote shell or code execution.
+```
+
+The [installation prompt guide](docs/agent-install.md) explains scope, verification and the follow-up connection flow. Installing npm alone does not register MCP in every coding app or inject tools into an already running session.
+
+### Manual installation
+
+```sh
+npm install -g @sruthik/agentlink@latest --prefer-online
+agentlink version --format json
+# Optional local diagnostics:
 npx @sruthik/agentlink doctor
-agentlink doctor
-codex mcp add agentlink -- agentlink-mcp
-# or: claude mcp add -s user agentlink -- agentlink-mcp
-# OpenCode: add an MCP stdio server named agentlink with command agentlink-mcp in OpenCode settings
 ```
 
-After that, use Codex/Claude Code/OpenCode normally. The agent sees AgentLink tools in its MCP tool catalog and uses them to coordinate contracts/messages without you manually operating AgentLink.
+An agent with terminal access can use the CLI immediately in any repository. For MCP, run this from the chosen repository with your harness profile:
 
-Core coordination does not require tmux, an IDE plugin, a daemon, or a cloud service. Each live MCP/IDE process registers an expiring lease on the shared local bus. tmux pane discovery and guarded pane typing remain optional compatibility capabilities.
-
-You can also inspect setup help with:
-
-```bash
-npx @sruthik/agentlink setup --harness all
+```sh
+agentlink setup --harness claude-code --write --check
+# Profiles: claude-code, codex, copilot, gemini, opencode
 ```
 
-For MCP-capable harnesses, the package exposes `agentlink-mcp` as a stdio server.
+Existing settings are preserved. Conflicting entries and existing TOML/JSONC may need an explicit merge; see [setup](docs/setup.md). MCP may require reconnecting the session and approving the normal project trust prompt. Installing npm alone does not register MCP with every app.
+
+## Connect two agents
+
+1. Both developers install AgentLink in their chosen agent environment.
+2. In your repository, tell your agent:
+
+   > Use AgentLink to connect to Alice at 192.168.1.11 and give me the connection code.
+
+3. Send the generated `AL1-...` code privately to Alice. In her repository, she tells her agent:
+
+   > Use AgentLink to accept this connection and start communicating: AL1-...
+
+Use Alice's actual reachable IP. AgentLink manages private identities, scoped communication permissions and background listeners. Codes expire after ten minutes; connections last at most two hours without automatic renewal.
+
+The agents can exchange messages and use bounded waits while actively communicating. Pairing grants communication only: repository changes, command execution, commits and publication still need each owner's authorization. It does not enable universal idle-agent wake. See [connection commands and troubleshooting](docs/connect.md).
+
+## What you can do
+
+- Coordinate backend/frontend API changes across repositories through cross-repo contract negotiation.
+- Exchange proposals and review findings with durable history.
+- Record revision-bound approvals and agreed interface contracts.
+- Keep each owner's repository, credentials and execution permissions separate.
+
+## Documentation
+
+| Topic | Guide |
+| --- | --- |
+| Agent-operated installation | [Installation prompt and scope](docs/agent-install.md) |
+| MCP configuration and compatibility | [Setup](docs/setup.md) |
+| Ordinary two-computer pairing | [Connect by code](docs/connect.md) |
+| Advanced agreements and tasks | [Network collaboration](docs/network-collaboration.md) |
+| Diagnostics and finite access | [Operations](docs/network-operations.md) |
+| Harness-specific wake support | [Wake adapters](docs/network-wake.md) |
+| Local checks and open physical-host gate | [Verification status](docs/network-acceptance.md) |
 
 ## Demo
 
 ![AgentLink terminal demo](demos/agentlink-demo.gif)
 
-The README animation above shows two local workspaces negotiating an API contract, recording approvals, accepting the contract, and syncing `.agentlink/CONTRACT.md` to the peer repo.
+This deterministic **local two-workspace** demo shows contract negotiation and approvals. It is separate from physical-host verification of the new connection flow. Recording: [agentlink-demo.cast](demos/agentlink-demo.cast).
 
-The source recording is also checked in as an asciinema v2 cast:
+## Development and advanced reference
 
-```bash
-asciinema play demos/agentlink-demo.cast
+```sh
+npm ci
+npm test
+npm run verify:release
 ```
 
-Regenerate both demo assets locally with:
+The release verifier builds and tests the source and isolated installed packages. It does not publish or invoke models. Local evidence and remaining limits are described in [release readiness](docs/release-readiness.md).
 
-```bash
-python3 scripts/record-demo.py
-python3 scripts/cast-to-gif.py
-```
+<details>
+<summary>Local bus, full CLI reference, optional wake, and migration</summary>
+
+The following reference covers the local shared-bus workflow and advanced commands. For ordinary connections between computers, start with [connect by code](docs/connect.md).
 
 ## Configure two peer repositories
 
@@ -202,7 +277,9 @@ preserving the boundary that publishing or public launch requires human approval
 `launch-brief` prints the
 final human approval artifact: product thesis, verification commands, demo commands,
 launch artifacts, CEO decisions needed, and the no-publish/no-launch-without-approval boundary.
-Version 0.2.0 notes are kept in [`release-notes-v0.2.0.md`](release-notes-v0.2.0.md) and included in the distribution tarball. They record actual-client verification, support boundaries and separate npm/GitHub availability. Historical 0.1.0 and 0.1.1 notes remain unchanged.
+Version 0.3.0 notes are kept in [`release-notes-v0.3.0.md`](release-notes-v0.3.0.md) and included in the distribution tarball. Earlier 0.2.0 notes remain at [`release-notes-v0.2.0.md`](release-notes-v0.2.0.md). They record actual-client verification, support boundaries and separate npm/GitHub availability. Historical 0.1.0 and 0.1.1 notes remain unchanged.
+
+The package also includes the private experimental authenticated network setup and verification guide at [`docs/network-foundation.md`](docs/network-foundation.md). Pairing a certificate and address does not authorize an agent: owners must separately expose the local agent/workspace and create a finite conversation-scoped grant before remote delivery.
 `version` prints the installed package version so harness configs and smoke tests
 can confirm the expected AgentLink build is on PATH.
 Repository acceptance can be rerun with
@@ -214,8 +291,7 @@ recovery against durable files, emits `reliability-summary.json`, and removes it
 temporary repositories and subprocesses. It does not require or simulate an LLM;
 the supervised Codex native-wake acceptance is a separate host-side run. A prior
 packed-artifact host run passed the supported Codex workflow; it is not evidence
-for arbitrary GUI/IDE/Claude wake, and the final 0.2.0 tarball requires its own
-outer-controller native retest before publication.
+for arbitrary GUI/IDE/Claude wake, and physical/native acceptance for the current runtime remains a separate gate.
 `demo --peer <repo-path>` runs a deterministic local two-repo API-contract
 negotiation smoke: it creates an append-only conversation, records producer and
 consumer messages, records two approvals, marks the contract Accepted, closes the
@@ -335,3 +411,13 @@ Back up `.agentlink/` before changing ignore rules or moving the authority check
 - tmux pane messaging is notification/bridge, not durable storage.
 - Repo contexts stay isolated; agents exchange summaries/contracts only.
 - Human is founder/approver, not message router.
+
+The experimental network worktree also includes revision-bound collaboration, scoped local execution permits, explicit task processing evidence, and restart-safe native harness verification. See [collaboration documentation](docs/network-collaboration.md) and the [owner-operated MacBook pilot](docs/network-macbook-pilot.md). Version 0.3.0 includes this network surface; physical-host acceptance remains a separate, pending gate.
+
+Automatic network harness wake: see [enrollment, Codex supervisor and Claude channels](docs/network-wake.md).
+
+For network diagnostics, easier finite expiry input (`--ttl 12h`), MCP recovery and private runtime build fingerprints, see [network operations](docs/network-operations.md). Run `agentlink network doctor --state-root <absolute-private-state>` from the owning project; this local inspection does not initialize files or prove native model processing.
+
+For development release validation, run `npm ci` and `npm run verify:release`. This saves the tested private archive, checksum and local gate logs under `.hermes/release/`. See [release readiness and remaining physical-host acceptance](docs/release-readiness.md). The command never publishes or renews pilot permissions.
+
+</details>

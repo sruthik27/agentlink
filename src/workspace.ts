@@ -280,14 +280,15 @@ async function readAssociation(root: string): Promise<WorkspaceAssociation> {
   return association;
 }
 
-async function readAndValidateBus(association: WorkspaceAssociation): Promise<BusManifest> {
-  await ensureBusDirectories(association.busPath);
+async function readAndValidateBus(association: WorkspaceAssociation, initialize = true): Promise<BusManifest> {
+  if (initialize) await ensureBusDirectories(association.busPath);
+  else await assertNotSymlink(association.busPath, 'Bus directory');
   const bus = await parseJson<BusManifest>(busManifestFile(association.busPath), 'Bus manifest');
   if (bus.schemaVersion !== BUS_SCHEMA_VERSION) throw new Error(`Unsupported bus schema version: ${bus.schemaVersion}`);
   if (bus.busId !== association.busId || bus.authorityWorkspaceId !== association.authorityWorkspaceId) {
     throw new Error(`Workspace association does not match bus manifest at ${association.busPath}`);
   }
-  if (await readUtf8IfExists(agentRegistryFile(association.busPath)) === undefined) {
+  if (initialize && await readUtf8IfExists(agentRegistryFile(association.busPath)) === undefined) {
     await writeJson(agentRegistryFile(association.busPath), { schemaVersion: 1, registrations: [] } satisfies AgentRegistrationRegistry);
   }
   return bus;
@@ -541,6 +542,21 @@ export async function resolveActiveParticipant(cwd = process.cwd()): Promise<Par
   if (!participant || participant.workspaceId !== context.identity.workspaceId) {
     throw new Error(`Active participant ${selection.participantId} is not registered for workspace ${context.identity.workspaceId}. Run \`agentlink actor use --id <id>\`.`);
   }
+  return participant;
+}
+
+/** Inspect an existing selection without creating a workspace, bus or participant. */
+export async function readActiveParticipant(cwd = process.cwd()): Promise<ParticipantIdentity> {
+  const root = await canonicalRoot(cwd);
+  await assertNotSymlink(statePath(root), 'AgentLink workspace directory');
+  const identity = await readWorkspaceIdentity(root);
+  const association = await readAssociation(root);
+  await readAndValidateBus(association, false);
+  const configuredId = process.env.AGENTLINK_PARTICIPANT_ID?.trim();
+  const selected = configuredId || (await parseJson<ActorSelection>(actorFile(root), 'Actor selection')).participantId;
+  const registry = await parseJson<ParticipantRegistry>(participantRegistryFile(association.busPath), 'Participant registry');
+  const participant = registry.participants.find(p => p.participantId === assertId(selected, 'participant id') && p.workspaceId === identity.workspaceId);
+  if (!participant) throw new Error('Selected actor is not registered in this workspace');
   return participant;
 }
 

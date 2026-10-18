@@ -195,7 +195,7 @@ function refs(config: Awaited<ReturnType<typeof enroll>>['config'], messageId: s
   };
 }
 
-test('enqueue is fast and separate from a serialized Codex run; success persists thread and exact acknowledgement', async (t) => {
+test('enqueue does not invoke Codex and is separate from a serialized run; success persists thread and exact acknowledgement', async (t) => {
   const item = await enroll(t);
   const first = await appendMessage(item.source, item.conversationId, {
     role: 'user', body: 'first task', recipientParticipantId: item.peerParticipantId,
@@ -204,10 +204,11 @@ test('enqueue is fast and separate from a serialized Codex run; success persists
     role: 'user', body: 'second task', recipientParticipantId: item.peerParticipantId,
   });
 
-  const started = Date.now();
   assert.equal((await enqueueCodexWake(item.configPath, refs(item.config, first.messageId!, 'one'))).outcome, 'queued');
-  assert.ok(Date.now() - started < 500);
   assert.equal((await enqueueCodexWake(item.configPath, refs(item.config, second.messageId!, 'two'))).outcome, 'queued');
+  // Scheduling load is not evidence of a synchronous model invocation. Check
+  // the runner's durable side effect before explicitly starting any worker.
+  await assert.rejects(readFile(join(item.root, 'fake-invocations.jsonl')), { code: 'ENOENT' });
 
   const [left, right] = await Promise.all([runCodexWakeOnce(item.configPath), runCodexWakeOnce(item.configPath)]);
   assert.deepEqual([left.outcome, right.outcome].sort(), ['busy', 'completed']);

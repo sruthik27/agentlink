@@ -157,12 +157,11 @@ function renderCopilotSection(): string[] {
   return [
     '### GitHub Copilot CLI',
     '',
-    'Use AgentLink as a standalone control-plane CLI beside Copilot CLI today. If your Copilot CLI environment exposes MCP configuration, point it at the generic stdio server above.',
+    'Configure project MCP, then start Copilot in this trusted repo and inspect /mcp. Organization policy may restrict servers.',
     '',
     '```bash',
-    'npm run agentlink -- context --format json',
-    'npm run agentlink -- read',
-    'npm run agentlink -- contract --set-section "Copilot Notes" --content "- ..."',
+    'agentlink setup --harness copilot --write --check',
+    'copilot',
     '```',
   ];
 }
@@ -171,11 +170,11 @@ function renderGeminiSection(): string[] {
   return [
     '### Gemini CLI',
     '',
-    'Use the generic stdio MCP server config when Gemini CLI is running with MCP support. Without MCP, keep using the AgentLink CLI commands as the durable local bus.',
+    'Configure project .gemini/settings.json, then start Gemini in this repo and inspect /mcp.',
     '',
     '```bash',
-    'npm run agentlink -- setup --harness stdio --format json',
-    'npm run agentlink -- replay --format json',
+    'agentlink setup --harness gemini --write --check',
+    'gemini',
     '```',
   ];
 }
@@ -189,6 +188,9 @@ export function renderSetupGuideMarkdown(guide: SetupGuide): string {
     '- Install: `npm install -g @sruthik/agentlink` or run with `npx @sruthik/agentlink ...`',
     '- Quick check: `npx @sruthik/agentlink doctor`',
     '- Smoke test: `agentlink doctor`, then add `agentlink-mcp` to your coding agent MCP config.',
+    '- Project quick setup: `agentlink setup --harness copilot --write --check` (also claude-code, codex, gemini or opencode).',
+    '- Preview: `agentlink setup --harness copilot --config`. Conflicting entries, existing Codex TOML and OpenCode JSONC are preserved for explicit merge.',
+    '- The check initializes local workspace metadata and proves MCP startup/tool discovery; native model use and auto-wake are separate gates.',
     '- Cross-repo pairing: from the owner repo run `agentlink contract --conversation <id> --sync-to ../peer`, then from the peer run `agentlink join --conversation <id>`.',
     '- Message processing: use explicit conversation ids, persist the returned `nextCursor`, and call `agentlink ack` only after processing succeeds.',
     '- Core discovery is the explicit expiring bus registry; tmux is optional and never required.',
