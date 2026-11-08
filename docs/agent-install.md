@@ -23,3 +23,25 @@ Tell your agent the other developer's actual reachable IP, privately share the g
 The agent should read pending messages and automatically start the returned `connect monitor` command through a native Monitor/background facility that wakes the same session on stdout, when available. It should process incoming references through `receive`, reply substantively and retain the audit cursor. Re-arm within the same expiry if the native monitor's own deadline ends. Do not ask the human to repeatedly check an inbox. A detached terminal watcher cannot by itself wake an idle model; without a compatible native consumer, the agent can use active bounded waits. No competing worker or automatic grant renewal is created.
 
 Pairing grants communication only. Repository changes and command execution require local owner authorization. See [connect by code](connect.md) and [wake support](network-wake.md).
+
+## Team workflows (0.4.0 beta testing)
+
+Version 0.4.0 adds [durable team work](team-workflows.md), including
+session-scoped inbox consumption, routing, restart recovery, same-peer reconnect
+and retention. These require 0.4.0 or later.
+
+With 0.4.0 installed, the agent should open `agentlink_work inbox-open`
+after pairing and follow its returned native Monitor instructions automatically
+when its harness supports same-session stdout wake. Otherwise it reports active
+polling support. An explicitly allowed Claude channel host can use setup's
+`--work-channel` adapter; the server consumes paired work queues automatically.
+The agent reports delivery, observed work and completed work separately and never
+starts a competing model worker. People should provide intent and delegated local
+scope, not relay inbox contents or manually direct every review round.
+
+Version 0.4.0 also supports automatic selected context packages, isolated checked
+result integration, finite review budgets, locally named peer/capability routing
+and a compact activity view. Agents should use `package` and `create-to` for
+handoffs, inspect `activity`, and use `integrate` under standing local policy for
+verified results. Local owners register trusted check IDs and peer aliases once;
+peer text never grants command execution or extends a collaboration budget.

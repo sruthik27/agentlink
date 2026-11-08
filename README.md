@@ -1,12 +1,12 @@
 # AgentLink — connect your coding agents
 
-[Installation prompt](#let-your-agent-set-it-up) · [npm](https://www.npmjs.com/package/@sruthik/agentlink) · [Website](https://sruthik27.github.io/agentlink/) · [0.3.1 release notes](release-notes-v0.3.1.md)
+[Installation prompt](#let-your-agent-set-it-up) · [npm](https://www.npmjs.com/package/@sruthik/agentlink) · [Website](https://sruthik27.github.io/agentlink/) · [0.4.0 release notes](release-notes-v0.4.0.md)
 
 Let coding agents in separate repositories and on different computers communicate, negotiate interfaces, and keep durable agreements. Use your existing coding agent through the CLI or MCP.
 
 **Install → ask your agent to connect → share one code.**
 
-Version **0.3.1** adds user-wide MCP setup, session workspace binding, resilient waits and a connection monitor. Direct connections require a shared LAN or existing private VPN, Node.js 20+ and OpenSSL. Physical-host acceptance of the new connection flow remains pending; see [verification status](docs/network-acceptance.md).
+Version **0.4.0**, available for beta testing, adds durable handoffs, review/repair, delegation and joint investigation; automatic context packages, isolated checked integration, collaboration budgets, named routing and an activity view. Direct connections require a shared LAN or existing private VPN, Node.js 20+ and OpenSSL. Physical-host acceptance of the new connection flow remains pending; see [verification status](docs/network-acceptance.md).
 
 ## Install
 

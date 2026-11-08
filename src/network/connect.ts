@@ -2,18 +2,23 @@ import { fork } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
 import { createSocket } from 'node:dgram';
 import { isIP } from 'node:net';
-import { mkdir, readFile, readdir, realpath } from 'node:fs/promises';
+import { mkdir, readFile, readdir, realpath, rm } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { isAbsolute, join, relative, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { setTimeout as pause } from 'node:timers/promises';
-import { atomicWriteFile, assertNotSymlink } from '../atomic.js';
+import { atomicWriteFile, assertNotSymlink, withFileLock } from '../atomic.js';
 import { collectRepoContext } from '../context.js';
 import { resolveActiveParticipant } from '../workspace.js';
 import { initializeNodeIdentity } from './identity.js';
 import { callRemoteAgentLinkTool } from '../mcp/remote-tools.js';
 import { validateNetworkId } from './types.js';
 import { AuthenticatedRequestError, type AuthenticatedRequestOptions } from './a2a.js';
+import { listLocalGrantSummaries,authorizeGrantExpiry } from './trust.js';
+import { resolvePairedPeer } from './config.js';
+import { authorizeCollaborationExpiry } from './collaboration.js';
+import { expiryFromOptions } from './expiry.js';
 
 export interface ConnectionRecord {
   version: 1; id: string; workspace: string; actor: string; root: string;
@@ -37,6 +42,13 @@ export const CONNECT_HELP = `AgentLink connection setup (run from your current r
   agentlink connect monitor --connection <id> [--after <audit-sequence>]
       Stream incoming event references for your agent's native background/Monitor tool until stop/expiry.
   agentlink connect stop --connection <id>
+  agentlink connect reconnect --connection <id>
+      Recover a crashed helper using the same identity, address and unchanged authorization.
+  agentlink connect resume --connection <id>
+      Explicit local-owner resume after stop, only within existing finite authorization.
+  agentlink connect authorize --connection <id> --request-id <stable-id> --ttl 2h
+      Local owner only: authorize another finite window for this same pinned peer.
+      Run on both hosts after stopping helpers; then resume. No new pairing code.
 Communication lasts at most two hours, never renews itself, and does not authorize code execution.
 Both hosts must be directly reachable by IP. No SSH, firewall changes, public directory or relay.
 Any agent with terminal access can use these commands; MCP clients can use agentlink_connect.`;
@@ -106,7 +118,10 @@ export async function readConnection(workspace: string, id: string): Promise<Con
 function publicStatus(c: ConnectionRecord) {
   let alive = false;
   if (c.pid) { try { process.kill(c.pid, 0); alive = true; } catch { /* no active daemon */ } }
-  const status = Date.parse(c.expiresAt) <= Date.now() ? 'expired' : !alive && ['waiting', 'connected', 'starting'].includes(c.status) ? 'offline' : c.status;
+  const status = Date.parse(c.expiresAt) <= Date.now() ? 'expired' : !alive && ['waiting', 'connected', 'starting'].includes(c.status)
+    // The helper can exit between listener shutdown and its final metadata write.
+    // A missing process plus the durable owner stop is a completed transport stop.
+    ? existsSync(join(c.root, 'stop')) ? 'stopped' : 'offline' : c.status;
   return { id: c.id, developer: c.label, status, expiresAt: c.expiresAt, peerActor: c.peerActor,
     communicationOnly: true, automaticWake: false, ...(c.error ? { error: c.error } : {}) };
 }
@@ -119,6 +134,7 @@ export function connectionConsumerInstructions(id: string, workspace: string, ac
     nativeMonitorEnv: { AGENTLINK_PARTICIPANT_ID: actor },
     instruction: 'Keep communication active without asking the human to check an inbox. Read pending messages and retain the latest audit sequence. If this harness has a native Monitor/background tool that wakes this same session on stdout, start nativeMonitorCommand in nativeMonitorCwd with nativeMonitorEnv and --after <sequence> using that tool now. On incoming event references, receive, process and reply as needed; do not reply to your own messages or create acknowledgement loops. Re-arm only within the unchanged connection expiry if the native tool deadline ends. A detached shell process alone does not wake a model. If native background wake is unavailable, continue bounded wait calls while active and state that idle wake is unavailable. Do not start a second model worker or renew permissions automatically.',
     idleWakeVerified: false,
+    workInbox: { tool:'agentlink_work',arguments:{action:'inbox-open',connection:id,route:'main',mode:'native-monitor',leaseSeconds:60},instruction:'For handoff, review, delegation or investigation, open this durable work inbox and start its returned native Monitor command automatically when supported. Its session lease and acknowledgements survive restart. Use active-poll if idle stdout wake is unavailable; locally configured --work-channel servers consume this route automatically.' },
   };
 }
 
@@ -169,7 +185,7 @@ export async function monitorConnection(workspace: string, id: string, emit: (ev
   }
 }
 
-async function launch(c: ConnectionRecord, code?: string): Promise<Record<string, unknown>> {
+async function launch(c: ConnectionRecord, code?: string, resume = false): Promise<Record<string, unknown>> {
   const entry = fileURLToPath(new URL('./connect-daemon.js', import.meta.url));
   const child = fork(entry, [join(c.root, 'connection.json')], {
     cwd: c.workspace, detached: true, stdio: ['ignore', 'ignore', 'ignore', 'ipc'],
@@ -188,7 +204,57 @@ async function launch(c: ConnectionRecord, code?: string): Promise<Record<string
       if (message.error) finish(new Error(String(message.error)));
       else if (message.ready) finish(undefined, message);
     });
-    child.send({ start: true, ...(code ? { code } : {}) });
+    child.send({ start: true, ...(resume ? { resume: true } : {}), ...(code ? { code } : {}) });
+  });
+}
+
+/** A transport restart reuses durable pins/grants. It never repeats pairing or extends access. */
+export async function reconnectConnection(workspace:string,id:string,resumeOwnerStop=false):Promise<Record<string,unknown>> {
+  const original=await readConnection(workspace,id);
+  return withFileLock(join(original.root,'locks'),'connection-lifecycle',async()=>{
+    const c=await readConnection(workspace,id),status=publicStatus(c).status;
+    if(status==='connected') return {...publicStatus(c),consumer:connectionConsumerInstructions(c.id,c.workspace,c.actor)};
+    if(Date.parse(c.expiresAt)<=Date.now() || !c.peerNode || !c.peerActor || !c.address) throw new Error('Connection is unpaired or authorization expired; explicit owner authorization required');
+    if(existsSync(join(c.root,'stop')) && !resumeOwnerStop) throw new Error('Connection was stopped by its owner; reconnect will not undo owner stop');
+    if(c.pid) {try {process.kill(c.pid,0);throw new Error('Connection helper is still running; wait for its shutdown before resuming');}catch(error){if((error as NodeJS.ErrnoException).code!=='ESRCH')throw error;}}
+    const peer=await resolvePairedPeer(c.root,'peer');
+    const grant=(await listLocalGrantSummaries(c.root,c.actor)).find(g=>g.grantId==='connection');
+    if(!grant || grant.revoked || !grant.peerIdentityMatches || grant.remoteNodeId!==c.peerNode || grant.remoteAgentId!==c.peerActor || grant.conversationId!==c.id || grant.expiresAt!==c.expiresAt || peer.nodeId!==c.peerNode) throw new Error('Connection authorization or pinned peer changed; restart refused');
+    if(resumeOwnerStop) await rm(join(c.root,'stop'),{force:true});
+    return launch(c,undefined,true);
+  });
+}
+
+export async function authorizeConnectionAccess(workspace:string,id:string,requestId:string,options:Record<string,string>):Promise<Record<string,unknown>> {
+  validateNetworkId(requestId,'owner authorization request');const original=await readConnection(workspace,id);
+  return withFileLock(join(original.root,'locks'),'connection-lifecycle',async()=>{
+    const c=await readConnection(workspace,id);
+    if(!c.peerNode || !c.peerActor || !c.address)throw new Error('Authorize access only for an already paired relationship');
+    if(c.pid){try{process.kill(c.pid,0);throw new Error('Stop this connection helper before changing its finite authorization');}catch(error){if((error as NodeJS.ErrnoException).code!=='ESRCH')throw error;}}
+    const peer=await resolvePairedPeer(c.root,'peer');if(peer.nodeId!==c.peerNode)throw new Error('Pinned connection peer changed');
+    const scopedGrant=(await listLocalGrantSummaries(c.root,c.actor)).find(g=>g.grantId==='connection');
+    if(!scopedGrant || scopedGrant.revoked || !scopedGrant.peerIdentityMatches || scopedGrant.remoteNodeId!==c.peerNode || scopedGrant.remoteAgentId!==c.peerActor || scopedGrant.conversationId!==c.id)throw new Error('Communication grant was revoked or its scope changed; renewal refused');
+    const file=join(c.root,'connection-access-'+requestId+'.json');await assertNotSymlink(file,'Connection authorization receipt');
+    let intent:{requestId:string;oldExpiry:string;expiresAt:string;fingerprint:string;input:string;status:string}|undefined;
+    const input=JSON.stringify(Object.fromEntries(Object.entries(options).sort()));
+    try{intent=JSON.parse(await readFile(file,'utf8'));}catch(error){if((error as NodeJS.ErrnoException).code!=='ENOENT')throw error;}
+    if(intent && (intent.requestId!==requestId || intent.fingerprint!==peer.identity.fingerprint || intent.input!==input))throw new Error('Conflicting owner authorization request');
+    if(!intent) {
+      if((await readdir(c.root)).filter(name=>name.startsWith('connection-access-')).length>=128)throw new Error('Owner authorization receipt capacity reached');
+      intent={requestId,oldExpiry:c.expiresAt,expiresAt:expiryFromOptions(options,30*86400_000),fingerprint:peer.identity.fingerprint,input,status:'prepared'};
+      await atomicWriteFile(file,JSON.stringify(intent));
+    }
+    if(![intent.oldExpiry,intent.expiresAt].includes(c.expiresAt))throw new Error('Connection authorization changed after this request');
+    if(intent.status==='authorized') {
+      if(scopedGrant.expiresAt!==intent.expiresAt || Date.parse(intent.expiresAt)<=Date.now())throw new Error('This owner authorization was superseded or expired; use a new explicitly authorized request');
+      return {id:c.id,status:'authorized-stopped',expiresAt:intent.expiresAt,receipt:requestId,executionPermissionChanged:false};
+    }
+    await authorizeGrantExpiry(c.root,'connection',peer.identity.fingerprint,intent.oldExpiry,intent.expiresAt);
+    if(c.role==='invite')await authorizeCollaborationExpiry(c.root,c.id,c.actor,peer.identity.fingerprint,intent.oldExpiry,intent.expiresAt);
+    c.expiresAt=intent.expiresAt;c.status='stopped';delete c.error;
+    await atomicWriteFile(join(c.root,'connection.json'),JSON.stringify(c));
+    await atomicWriteFile(file,JSON.stringify({...intent,status:'authorized'}));
+    return {id:c.id,status:'authorized-stopped',expiresAt:c.expiresAt,receipt:requestId,executionPermissionChanged:false,instruction:'The other host must authorize its own finite window. Resume this connection with local owner intent; the same identities, routes and work are preserved. No execution policy was renewed.'};
   });
 }
 
@@ -196,7 +262,7 @@ export async function connectAction(workspace: string, args: Record<string, unkn
   const allowed = ['action', 'to', 'ip', 'code', 'connection', 'body', 'requestId', 'after', 'timeoutSeconds'];
   if (Object.keys(args).some(k => !allowed.includes(k))) throw new Error('Unsupported connection argument');
   const action = args.action ?? (args.code ? 'accept' : args.ip ? 'invite' : 'status');
-  const fields: Record<string, string[]> = { invite: ['to','ip'], accept: ['code'], status: [], send: ['connection','body','requestId'], receive: ['connection'], wait: ['connection','after','timeoutSeconds'], stop: ['connection'] };
+  const fields: Record<string, string[]> = { invite: ['to','ip'], accept: ['code'], status: [], send: ['connection','body','requestId'], receive: ['connection'], wait: ['connection','after','timeoutSeconds'], stop: ['connection'], reconnect:['connection'],resume:['connection'] };
   if (typeof action !== 'string' || !fields[action] || Object.keys(args).some(k => k !== 'action' && !fields[action].includes(k))) throw new Error('Arguments do not match the requested connection action');
   if (action === 'invite' || action === 'accept') {
     const parsed = action === 'accept' ? parseConnectionCode(args.code) : undefined;
@@ -230,11 +296,13 @@ export async function connectAction(workspace: string, args: Record<string, unkn
     return { connections: records };
   }
   const c = await readConnection(workspace, validateNetworkId(args.connection, 'connection'));
+  if(action==='reconnect' || action==='resume') return reconnectConnection(workspace,c.id,action==='resume');
   if (action === 'stop') {
     await atomicWriteFile(join(c.root, 'stop'), 'owner stop\n');
     return { id: c.id, status: 'stop-requested' };
   }
-  if (publicStatus(c).status !== 'connected' || !c.peerActor) throw new Error('Connection is not live; inspect connect status. Do not replay uncertain sends.');
+  if (publicStatus(c).status==='offline') await reconnectConnection(workspace,c.id);
+  if (publicStatus(await readConnection(workspace,c.id)).status !== 'connected' || !c.peerActor) throw new Error('Connection is not live; inspect connect status. Do not replay uncertain sends.');
   if (action === 'send' && (typeof args.body !== 'string' || !args.body.trim() || args.body.length > 2000)) throw new Error('Message must contain 1–2000 characters');
   if (action === 'wait' && (!Number.isInteger(args.after) || (args.after as number) < 0
     || (args.timeoutSeconds !== undefined && (!Number.isInteger(args.timeoutSeconds) || (args.timeoutSeconds as number) < 1 || (args.timeoutSeconds as number) > 25)))) throw new Error('wait requires nonnegative after and timeoutSeconds from 1 to 25');
@@ -278,6 +346,12 @@ function isTransientConnectionError(error: unknown): boolean {
 
 export async function runConnectCli(args: string[], workspace: string, output: { log(value: string): void }) {
   if (args.length === 1 && ['help','--help','-h'].includes(args[0]!)) { output.log(CONNECT_HELP); return; }
+  if(args[0]==='authorize') {
+    const options:Record<string,string>={};for(let i=1;i<args.length;i+=2){const name=args[i]?.slice(2),value=args[i+1];if(!args[i]?.startsWith('--') || !['connection','request-id','ttl','expires-at'].includes(name!) || !value || value.startsWith('--') || name! in options)throw new Error(CONNECT_HELP);options[name!]=value;}
+    const connection=validateNetworkId(options.connection,'connection'),requestId=validateNetworkId(options['request-id'],'owner request');
+    const expiryOptions=Object.fromEntries(Object.entries(options).filter(([name])=>['ttl','expires-at'].includes(name)));
+    output.log(JSON.stringify(await authorizeConnectionAccess(workspace,connection,requestId,expiryOptions)));return;
+  }
   const input: Record<string, unknown> = {};
   if (args[0] && !args[0].startsWith('--')) input.action = args.shift();
   for (let i = 0; i < args.length; i += 2) {

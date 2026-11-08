@@ -86,6 +86,7 @@ import {
 import { runNetworkCli } from './network/cli.js';
 import { runtimeBuildIdentity } from './build-info.js';
 import { runConnectCli } from './network/connect.js';
+import { runWorkCli } from './network/work-cli.js';
 
 const help = `AgentLink — local-first cross-repo coding-agent coordination
 
@@ -93,6 +94,7 @@ Usage:
   agentlink connect --to <developer> --ip <peer-ip>
       Share one expiring connection code; recipient runs connect --code <code> in their project
   agentlink connect help
+  agentlink work help
       Agent-driven pairing, messages, status and stop; no manual network setup
   agentlink init [--new-workspace]
       Create .agentlink workspace files in the current repo
@@ -353,6 +355,11 @@ export async function runCli(
     return;
   }
 
+  if (command === 'work') {
+    await runWorkCli(args.slice(1), cwd, output);
+    return;
+  }
+
   if (command === 'list') {
     if (args.length > 2 || (args[1] !== undefined && args[1] !== '--tmux')) throw new UsageError('Usage: agentlink list [--tmux]');
     if (args[1] === '--tmux') {
@@ -395,7 +402,7 @@ export async function runCli(
       ? ['remove']
       : command === 'send'
         ? ['notify']
-        : command === 'setup' ? ['write', 'check', 'config'] : [];
+        : command === 'setup' ? ['write', 'check', 'config','work-channel'] : [];
   const { options, positionals } = parseArguments(args.slice(1), booleanOptions);
 
   if (command === 'actor') {
@@ -568,7 +575,7 @@ export async function runCli(
   }
 
   if (command === 'setup') {
-    rejectUnknownOptions(options, ['harness', 'format', 'write', 'check', 'config', 'state-root', 'wake-config', 'scope']);
+    rejectUnknownOptions(options, ['harness', 'format', 'write', 'check', 'config', 'state-root', 'wake-config', 'scope','work-channel']);
     if (positionals.length > 0) throw new UsageError('Usage: agentlink setup [--harness <stdio|claude-code|codex|copilot|opencode|gemini|all>] [--format <markdown|json>]');
     const format = options.format ?? 'markdown';
     if (!['markdown', 'json'].includes(format)) throw new UsageError('--format must be markdown or json');
@@ -576,9 +583,9 @@ export async function runCli(
       ? 'all'
       : parseSetupHarness(options.harness);
     if (options.scope && options.scope !== 'user' && options.scope !== 'project') throw new UsageError('--scope must be user or project');
-    if (options.write || options.check || options.config || options['state-root'] || options['wake-config'] || options.scope) {
+    if (options.write || options.check || options.config || options['state-root'] || options['wake-config'] || options.scope || options['work-channel']) {
       if (harness === 'all') throw new UsageError('Choose one --harness for project setup: claude-code, codex, copilot, gemini, opencode or stdio');
-      const plan = await planSetup(cwd, harness, options['state-root'], options['wake-config'], options.scope as 'user' | 'project' | undefined);
+      const plan = await planSetup(cwd, harness, options['state-root'], options['wake-config'], options.scope as 'user' | 'project' | undefined,undefined,undefined,{workChannel:!!options['work-channel']});
       const result = {
         ...plan,
         ...(options.write ? { installation: await writeSetup(plan) } : {}),

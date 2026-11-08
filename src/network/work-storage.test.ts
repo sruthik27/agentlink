@@ -1,0 +1,66 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { mkdtemp,mkdir,rm,readFile,writeFile,utimes,stat } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { putWorkArtifact,getWorkArtifact,putWorkArtifactPart } from './work-artifacts.js';
+import { createWorkItem,operateWorkItem,readWorkItem,type NewWork } from './work-items.js';
+import { maintainWorkStorage,WORK_STORAGE_LIMITS,boundedWorkWrite } from './work-storage.js';
+import { sha256 } from './types.js';
+const origin={nodeId:'a',actorId:'author',fingerprint:'sha256:'+'a'.repeat(64)},owner={nodeId:'b',actorId:'worker',fingerprint:'sha256:'+'b'.repeat(64)};
+test('retention reclaims old blobs, obsolete snapshots and incomplete uploads while preserving active bytes and replay receipts',async t=>{
+  const root=await mkdtemp(join(tmpdir(),'work-retention-'));t.after(()=>rm(root,{recursive:true,force:true}));
+  const workspace=join(root,'repo');await mkdir(workspace);
+  const active=await putWorkArtifact(root,Buffer.from('active'),'active.patch'),retired=await putWorkArtifact(root,Buffer.from('retired'),'retired.patch'),orphan=await putWorkArtifact(root,Buffer.from('orphan'),'orphan.txt');
+  const draft=(id:string,artifact:typeof active):NewWork=>({id,kind:'handoff',title:id,goal:'Finish',criteria:['done'],origin,owner,scope:{paths:['src'],permissions:['read'],checks:[]},reviewRequired:false,dependencies:[],context:{summary:'Context',nextAction:'Inspect',artifacts:[artifact]}});
+  const author={actor:origin,local:false,workspace,sessionId:'a'},recipient={actor:owner,local:true,workspace,sessionId:'b'};
+  await createWorkItem(root,draft('active',active),author,'create-active');
+  await createWorkItem(root,draft('retired',retired),author,'create-retired');
+  const terminal=await operateWorkItem(root,'retired',recipient,{type:'decline',requestId:'decline',expectedVersion:1,summary:'No longer needed'});
+  const now=Date.now(),old=new Date(now-31*86400_000);
+  const archive=join(root,'work-items','archive','retired.json');terminal.updatedAt=old.toISOString();await writeFile(archive,JSON.stringify(terminal));
+  const snapshot=await putWorkArtifact(root,Buffer.from('obsolete immutable state'),'work-state/retired/1.json','application/json');
+  const incompleteBytes=Buffer.alloc(40000,9),incomplete={name:'incomplete.bin',mediaType:'application/octet-stream',bytes:incompleteBytes.length,digest:sha256(incompleteBytes)};
+  await putWorkArtifactPart(root,incomplete,0,incompleteBytes.subarray(0,32768).toString('base64'));
+  for(const ref of [active,retired,orphan,snapshot])await utimes(join(root,'work-artifacts',ref.digest.slice(7)+'.json'),old,old);
+  await utimes(join(root,'work-artifacts','incoming',incomplete.digest.slice(7)),old,old);
+  const abandoned=join(root,'work-artifacts','.aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa.tmp');await writeFile(abandoned,'abandoned atomic write');await utimes(abandoned,old,old);
+  await mkdir(join(root,'work-client','requests'),{recursive:true});
+  const receipt=join(root,'work-client','requests','create-retired.json');await writeFile(receipt,JSON.stringify({id:'retired',requestId:'create-retired',status:'received',hash:'request-hash',item:terminal}));
+  const result=await maintainWorkStorage(root,{force:true,now});
+  assert.equal(result.removedArtifacts,3);assert.equal(result.removedUploads,1);
+  assert.equal(result.removedTemporaries,1);
+  assert.equal((await getWorkArtifact(root,active)).toString(),'active');
+  for(const ref of [retired,orphan,snapshot])await assert.rejects(getWorkArtifact(root,ref),/ENOENT/);
+  assert.equal((await readWorkItem(root,'retired',origin)).state,'declined');
+  assert.equal((await createWorkItem(root,draft('retired',retired),author,'create-retired')).state,'declined');
+  await assert.rejects(createWorkItem(root,draft('retired',retired),author,'reuse-id'),/conflicting/);
+  const compact=JSON.parse(await readFile(receipt,'utf8'));assert.equal(compact.item,undefined);assert.equal(compact.receiptHash,terminal.events[0]!.hash);assert.ok((await stat(receipt)).size<500);
+  assert.equal((await maintainWorkStorage(root,{now})).skipped,true);
+});
+
+test('storage budgets fail before allocation and reserve metadata room for safe terminal actions',async t=>{
+  const root=await mkdtemp(join(tmpdir(),'work-budgets-'));t.after(()=>rm(root,{recursive:true,force:true}));
+  const previous={...WORK_STORAGE_LIMITS};t.after(()=>Object.assign(WORK_STORAGE_LIMITS,previous));
+  WORK_STORAGE_LIMITS.artifactBytes=2048;
+  await assert.rejects(putWorkArtifact(root,Buffer.alloc(3000),'oversized-budget.txt'),/storage budget/);
+  WORK_STORAGE_LIMITS.pendingUploads=1;
+  const refs=[1,2].map(byte=>{const data=Buffer.alloc(40000,byte);return {data,ref:{name:'part'+byte+'.bin',mediaType:'application/octet-stream',bytes:data.length,digest:sha256(data)}}});
+  const writes=await Promise.allSettled(refs.map(({data,ref})=>putWorkArtifactPart(root,ref,0,data.subarray(0,32768).toString('base64'))));
+  assert.equal(writes.filter(row=>row.status==='fulfilled').length,1);assert.equal(writes.filter(row=>row.status==='rejected').length,1);
+  WORK_STORAGE_LIMITS.metadataBytes=3*1024*1024;
+  const path=join(root,'work-inbox','budget.json');await mkdir(join(root,'work-inbox'));
+  const large=JSON.stringify({value:'x'.repeat(1100000)});
+  await assert.rejects(boundedWorkWrite(root,path,large),/metadata budget/);
+  await boundedWorkWrite(root,path,large,true);assert.ok((await stat(path)).size>1000000);
+});
+
+test('unreleased integration bytes stay pinned and released evidence gets a full retention window',async t=>{
+  const root=await mkdtemp(join(tmpdir(),'work-integration-retention-'));t.after(()=>rm(root,{recursive:true,force:true}));
+  const artifact=await putWorkArtifact(root,Buffer.from('verified integration evidence'),'integration/report.json');
+  const now=Date.now(),old=new Date(now-31*86400_000),record=join(root,'work-integrations','retained.json');await mkdir(join(root,'work-integrations'));
+  const blob=join(root,'work-artifacts',artifact.digest.slice(7)+'.json');await utimes(blob,old,old);
+  await writeFile(record,JSON.stringify({report:artifact,state:'passed'}));await maintainWorkStorage(root,{force:true,now});assert.equal((await getWorkArtifact(root,artifact)).toString(),'verified integration evidence');
+  await writeFile(record,JSON.stringify({report:artifact,state:'passed',releasedAt:new Date(now).toISOString()}));await maintainWorkStorage(root,{force:true,now});await getWorkArtifact(root,artifact);
+  await writeFile(record,JSON.stringify({report:artifact,state:'passed',releasedAt:old.toISOString()}));await maintainWorkStorage(root,{force:true,now});await assert.rejects(getWorkArtifact(root,artifact),/ENOENT/);
+});

@@ -1,6 +1,6 @@
 # Network and setup release candidate
 
-Version 0.3.1 builds on the published 0.3.0 connection flow with user-wide MCP setup, per-session binding, resilient read waits and a native background monitor. The owner authorized npm publication for installation and physical-host testing. Distribution does not establish physical-host acceptance.
+Version 0.4.0 adds durable team workflows, context packages, isolated verified integration, budgets, named routing, activity, restart recovery and retention on top of user-wide setup and code pairing. It is an owner-authorized beta testing release via npm latest. The owner authorized npm publication for installation and physical-host testing. Distribution does not establish physical-host acceptance.
 
 The current candidate also includes [agent-driven connection by code](connect.md): invite a developer at an IP, share one expiring code, and accept it from the other current project. Managed identities, communication grants and listeners replace the manual pilot setup for ordinary users. Existing terminal-capable sessions can use the global CLI; attached MCP sessions can use `agentlink_connect`. Physical acceptance must exercise these new runtime bytes; an older pilot archive cannot establish acceptance for this flow.
 

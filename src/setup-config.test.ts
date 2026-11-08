@@ -6,6 +6,17 @@ import { dirname, join } from 'node:path';
 import { planSetup, writeSetup, checkSetup } from './setup-config.js';
 import { runCli } from './cli.js';
 
+test('native work channel setup is explicit, limited to compatible hosts and checks the server without claiming model wake',async t=>{
+  const root=await mkdtemp(join(tmpdir(),'agentlink-channel-setup-'));t.after(()=>rm(root,{recursive:true,force:true}));
+  const repo=join(root,'repo');await mkdir(repo);
+  const plan=await planSetup(repo,'claude-code',undefined,undefined,'user',root,{}, {workChannel:true});
+  assert.deepEqual(plan.args.slice(-2),['--session','--work-channel']);
+  const check=await checkSetup(plan);assert.equal(check.status,'mcp-handshake-passed');assert.equal(check.nativeAgentVerified,false);
+  await assert.rejects(planSetup(repo,'codex',undefined,undefined,'user',root,{}, {workChannel:true}),/compatible/);
+  const output:string[]=[];await runCli(['setup','--harness','stdio','--scope','user','--config','--work-channel'],repo,{log:value=>{output.push(value);},error:()=>{}});
+  assert.ok(JSON.parse(output.join('')).args.includes('--work-channel'));
+});
+
 test('project adapters generate actual client formats and launch MCP from a fixed workspace', async t => {
   const root = await mkdtemp(join(tmpdir(), 'agentlink-setup-project-'));
   t.after(() => rm(root, { recursive: true, force: true }));

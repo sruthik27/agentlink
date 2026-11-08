@@ -1,11 +1,12 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createServer, request } from 'node:https';
-import { mkdtemp, mkdir, rm } from 'node:fs/promises';
+import { mkdtemp, mkdir, rm, realpath, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { setTimeout as pause } from 'node:timers/promises';
-import { connectAction, monitorConnection, readConnection } from './connect.js';
+import { connectAction, monitorConnection, readConnection, connectionDirectory, type ConnectionRecord } from './connect.js';
+import { resolveActiveParticipant } from '../workspace.js';
 import { loadNodeIdentity } from './identity.js';
 import { updatePeerAddress } from './config.js';
 
@@ -76,4 +77,19 @@ test('acceptor wait retries a real slow authenticated check; deadlines, abort, t
   const stopEvents: Record<string, unknown>[] = [];
   await monitorConnection(repos[1]!, id, event => { stopEvents.push(event); if (event.status === 'watching') void act(repos[1]!, 'stop'); }, events.find(e => e.status === 'incoming')!.after as number);
   assert(stopEvents.some(e => e.status === 'stopped'));
+});
+
+test('monitor recognizes durable owner stop after helper exit even before final metadata write', async t => {
+  const base = await mkdtemp(join(tmpdir(), 'agentlink-stop-race-')), workspace = join(base, 'repo'); await mkdir(workspace);
+  const before = process.env.AGENTLINK_CONNECTION_HOME; process.env.AGENTLINK_CONNECTION_HOME = join(base, 'private');
+  t.after(async () => { if (before === undefined) delete process.env.AGENTLINK_CONNECTION_HOME; else process.env.AGENTLINK_CONNECTION_HOME = before; await rm(base, { recursive: true, force: true }); });
+  const root = join(await connectionDirectory(workspace), 'stop-race'); await mkdir(root);
+  const actor = (await resolveActiveParticipant(workspace)).participantId;
+  const record: ConnectionRecord = { version: 1, id: 'stop-race', root, workspace: await realpath(workspace), actor,
+    role: 'accept', host: '127.0.0.1', targetIp: '127.0.0.1', label: 'fixture', expiresAt: new Date(Date.now() + 60000).toISOString(),
+    inviteExpiresAt: new Date(Date.now() + 60000).toISOString(), status: 'connected', pid: 2147483647, peerActor: 'peer' };
+  await writeFile(join(root, 'connection.json'), JSON.stringify(record)); await writeFile(join(root, 'stop'), 'owner stop\n');
+  const events: Record<string, unknown>[] = [];
+  await monitorConnection(workspace, record.id, event => events.push(event), 0);
+  assert.deepEqual(events, [{ id: record.id, status: 'stopped' }]);
 });

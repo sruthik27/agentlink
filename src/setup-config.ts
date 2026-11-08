@@ -14,11 +14,16 @@ export interface SetupPlan {
   command: string; args: string[]; config: Record<string, unknown> | string;
   verification: string; next: string[];
 }
-export async function planSetup(cwd: string, harness: SetupHarness, stateRoot?: string, wakeConfig?: string, scope: 'project' | 'user' = 'project', userHome = homedir(), configEnv: NodeJS.ProcessEnv = process.env): Promise<SetupPlan> {
+export async function planSetup(cwd: string, harness: SetupHarness, stateRoot?: string, wakeConfig?: string, scope: 'project' | 'user' = 'project', userHome = homedir(), configEnv: NodeJS.ProcessEnv = process.env,features:{workChannel?:boolean}={}): Promise<SetupPlan> {
   if (scope !== 'project' && scope !== 'user') throw new Error('--scope must be project or user');
   if (scope === 'user' && (stateRoot || wakeConfig)) throw new Error('User-wide setup cannot pin a project network state root or wake enrollment; use project scope for these');
   const workspace = await realpath(cwd);
   const args = [fileURLToPath(new URL('./mcp/launch.js', import.meta.url)), ...(scope === 'user' ? ['--session'] : ['--workspace', workspace])];
+  if(features.workChannel) {
+    if(!['claude-code','stdio'].includes(harness))throw new Error('--work-channel requires a native Claude channel-compatible host; other harnesses use native Monitor or active polling');
+    if(wakeConfig)throw new Error('Choose one work channel consumer or legacy wake enrollment, not both');
+    args.push('--work-channel');
+  }
   if (stateRoot) {
     if (!isAbsolute(stateRoot)) throw new Error('--state-root must be absolute');
     const root = await realpath(stateRoot), rel = relative(workspace, root);
@@ -58,7 +63,7 @@ export async function planSetup(cwd: string, harness: SetupHarness, stateRoot?: 
   if (harness === 'stdio') configPath = null;
   return { harness, workspace, scope, name, configPath, command, args, config,
     verification: 'Configuration only; use --check for a real MCP initialize/tools-list check. Native model use and automatic wake are separate acceptance gates.',
-    next: [scope === 'user' ? 'Reconnect the harness once. AgentLink is available across repositories; each new MCP session uses agentlink_session to bind its current workspace before any project operation.' : 'Start/reconnect your coding agent in this project and approve its normal project/MCP trust prompt.', 'Ask the agent to list AgentLink tools and conversations. MCP approval and organization policies still apply.', 'For two-host use, ask the agent to connect by code. Setup never creates grants, renews expiry or starts a daemon.'] };
+    next: [scope === 'user' ? 'Reconnect the harness once. AgentLink is available across repositories; each new MCP session uses agentlink_session to bind its current workspace before any project operation.' : 'Start/reconnect your coding agent in this project and approve its normal project/MCP trust prompt.', 'Ask the agent to list AgentLink tools and conversations. MCP approval and organization policies still apply.', 'For two-host use, ask the agent to connect by code. Setup never creates grants, renews expiry or starts a daemon.',features.workChannel?'Native work channel adapter enabled: the host must separately allow this MCP channel. --check verifies server protocol only; actual same-session model wake still needs host acceptance.':'After pairing, the agent opens its durable work inbox and starts the returned native Monitor command when same-session stdout wake is supported; otherwise it reports active polling only.'] };
 }
 function object(value: unknown): value is Record<string, unknown> { return !!value && typeof value === 'object' && !Array.isArray(value); }
 export async function writeSetup(plan: SetupPlan): Promise<{ status: string; configPath: string; backup?: string }> {

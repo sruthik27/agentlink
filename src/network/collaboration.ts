@@ -96,6 +96,17 @@ export async function listLocalCollaborationSummaries(root: string, nodeId: stri
     tasks: c.tasks.map(t => ({ id: t.id, phase: t.phase })),
   }));
 }
+
+/** Called only by explicit local owner connection authorization; execution permissions are untouched. */
+export async function authorizeCollaborationExpiry(root:string,id:string,agentId:string,peerFingerprint:string,previousExpiry:string,expiresAt:string):Promise<void> {
+  const local=await exportPublicIdentity(root),ttl=Date.parse(expiresAt)-Date.now();
+  if(!Number.isFinite(ttl) || ttl<=0 || ttl>30*86400_000 || new Date(expiresAt).toISOString()!==expiresAt)throw new Error('Invalid explicit collaboration expiry');
+  await withFileLock(join(root,'locks'),'collaborations',async()=>{
+    const state=await readState(root),c=state.conversations.find(c=>c.id===id);
+    if(!c || c.cancelled || c.authority.nodeId!==local.nodeId || c.authority.agentId!==agentId || c.remoteFingerprint!==peerFingerprint || ![previousExpiry,expiresAt].includes(c.expiresAt))throw new Error('Connection conversation is cancelled or its owner/scope changed');
+    c.expiresAt=expiresAt;await save(root,state);
+  });
+}
 export async function createCollaboration(root: string, input: {
   id: string; localAgentId: string; remoteNodeId: string; remoteAgentId: string; topic: string; expiresAt: string;
 }): Promise<Collaboration> {

@@ -17,6 +17,8 @@ const gates = [
   ['installed', process.execPath, ['scripts/verify-network-installed.mjs']],
   ['setup', process.execPath, ['scripts/verify-setup-installed.mjs']],
   ['connect', process.execPath, ['scripts/verify-connect-installed.mjs']],
+  ['teamWorkflows',process.execPath,['scripts/verify-team-workflows-installed.mjs']],
+  ['teamExperience',process.execPath,['scripts/verify-team-experience-installed.mjs']],
   ['wake', process.execPath, ['scripts/verify-network-wake.mjs']],
   ['adapters', process.execPath, ['scripts/verify-network-native-adapters.mjs']],
 ];
@@ -36,7 +38,9 @@ if (report.status !== 'FAIL') {
   const installed = JSON.parse(await readFile(join(output, 'installed.log'), 'utf8'));
   const setup = JSON.parse(await readFile(join(output, 'setup.log'), 'utf8'));
   const connect = JSON.parse(await readFile(join(output, 'connect.log'), 'utf8'));
-  report.gates.archiveConsistency = { status: installed.archiveSha256 === setup.archiveSha256 && setup.archiveSha256 === connect.archiveSha256 && connect.archiveSha256 === report.archiveSha256 ? 'PASS' : 'FAIL' };
+  const team=JSON.parse(await readFile(join(output,'teamWorkflows.log'),'utf8'));
+  const experience=JSON.parse(await readFile(join(output,'teamExperience.log'),'utf8'));
+  report.gates.archiveConsistency = { status: installed.archiveSha256 === setup.archiveSha256 && setup.archiveSha256 === connect.archiveSha256 && connect.archiveSha256===team.archiveSha256 && team.archiveSha256===experience.archiveSha256 && experience.archiveSha256 === report.archiveSha256 ? 'PASS' : 'FAIL' };
   report.status = report.gates.archiveConsistency.status;
 }
 await writeFile(join(output, 'result.json'), JSON.stringify(report, null, 2) + '\n');

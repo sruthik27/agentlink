@@ -4,11 +4,14 @@ import { isAbsolute } from 'node:path';
 // A fixed project binding works even when an MCP host launches from another cwd.
 async function main(): Promise<void> {
   const options: Record<string, string> = {};
-  const args = process.argv.slice(2);
+  const rawArgs = process.argv.slice(2);
+  if(rawArgs.filter(arg=>arg==='--work-channel').length>1)throw new Error('Duplicate work channel option');
+  const workChannel=rawArgs.includes('--work-channel');
+  const args=rawArgs.filter(arg=>arg!=='--work-channel');
   if (args.length === 1 && args[0] === '--session') {
     for (const name of ['AGENTLINK_NETWORK_STATE_ROOT', 'AGENTLINK_WAKE_CONFIG', 'AGENTLINK_PARTICIPANT_ID', 'AGENTLINK_WAKE_JOB_ID']) delete process.env[name];
     const { serveStdio } = await import('./server.js');
-    await serveStdio({ sessionScoped: true });
+    await serveStdio({ sessionScoped: true, workChannel });
     return;
   }
   for (let i = 0; i < args.length; i += 2) {
@@ -22,6 +25,6 @@ async function main(): Promise<void> {
   if (options['--state-root']) process.env.AGENTLINK_NETWORK_STATE_ROOT = options['--state-root'];
   if (options['--wake-config']) process.env.AGENTLINK_WAKE_CONFIG = options['--wake-config'];
   const { serveStdio } = await import('./server.js');
-  await serveStdio();
+  await serveStdio({workChannel});
 }
 main().catch(() => { console.error('AgentLink MCP startup failed; verify project, state root and enrollment bindings with agentlink doctor/network doctor.'); process.exitCode = 1; });

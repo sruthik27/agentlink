@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import { readFile, realpath } from 'node:fs/promises';
+import { randomUUID } from 'node:crypto';
 import { stdin, stdout } from 'node:process';
 
 stdout.on('error', (error: NodeJS.ErrnoException) => {
@@ -17,6 +18,8 @@ import {
 } from './remote-tools.js';
 import { initializeWorkspaceIdentity, resolveActiveParticipant } from '../workspace.js';
 import { CONNECT_TOOL, callConnectTool } from './connect-tools.js';
+import { WORK_TOOL, callWorkTool } from './work-tools.js';
+import { WorkChannel } from './work-channel.js';
 import { SESSION_INSTRUCTIONS, SESSION_TOOL, SessionWorkspace } from './session-tools.js';
 
 import { NetworkWakeConnection, readNetworkWakeConfig, networkWakeInstructions, withNetworkWakeDispatch } from '../network/wake.js';
@@ -57,6 +60,9 @@ let outputMode: StdioOutputMode = 'content-length';
 const activeRequests = new Map<string, AbortController>();
 let remoteBinding: RemoteMcpBinding | undefined;
 let sessionWorkspace: SessionWorkspace | undefined;
+const workSessionId = 'mcp-' + randomUUID();
+let workChannel:WorkChannel|undefined;
+let workChannelTimer:NodeJS.Timeout|undefined;
 
 function requestKey(id: JsonRpcId | undefined): string | undefined {
   return id === undefined ? undefined : JSON.stringify(id);
@@ -118,7 +124,7 @@ async function handleRequest(request: JsonRpcRequest): Promise<void> {
     if (request.method === 'initialize') {
       sendResult(request.id, {
         protocolVersion: '2024-11-05',
-        capabilities: { tools: {}, ...(wakeConnection?.config.harness === 'claude-channel' ? { experimental: { 'claude/channel': {} } } : {}) },
+        capabilities: { tools: {}, ...(wakeConnection?.config.harness === 'claude-channel' || workChannel ? { experimental: { 'claude/channel': {} } } : {}) },
         ...(sessionWorkspace ? { instructions: SESSION_INSTRUCTIONS } : wakeConnection ? { instructions: networkWakeInstructions(wakeConnection.config) } : {}),
         serverInfo: { name: 'agentlink-mcp', version: await readPackageVersion() },
       });
@@ -126,7 +132,7 @@ async function handleRequest(request: JsonRpcRequest): Promise<void> {
     }
 
     if (request.method === 'tools/list') {
-      sendResult(request.id, { tools: [...AGENTLINK_MCP_TOOLS, CONNECT_TOOL, ...AGENTLINK_REMOTE_MCP_TOOLS, ...(sessionWorkspace ? [SESSION_TOOL] : []), ...(wakeConnection ? [wakeAckTool, wakeNextTool] : [])] });
+      sendResult(request.id, { tools: [...AGENTLINK_MCP_TOOLS, CONNECT_TOOL, WORK_TOOL, ...AGENTLINK_REMOTE_MCP_TOOLS, ...(sessionWorkspace ? [SESSION_TOOL] : []), ...(wakeConnection ? [wakeAckTool, wakeNextTool] : [])] });
       return;
     }
 
@@ -157,17 +163,27 @@ async function handleRequest(request: JsonRpcRequest): Promise<void> {
         sendResult(request.id, { content: [{ type: 'text', text: 'Wake observation acknowledged; task processing is separate.' }] }); return;
       }
       if (wakeConnection) await wakeConnection.authorizeTool(toolName, (args ?? {}) as Record<string, unknown>);
+      if(toolName===WORK_TOOL.name && (args as Record<string,unknown>|undefined)?.action==='inbox-open' && (args as Record<string,unknown>).mode==='channel' && !workChannel)throw new Error('Native work channels require local launch --work-channel configuration; use native-monitor or active-poll otherwise');
       const result = toolName === CONNECT_TOOL.name
         ? await callConnectTool((args ?? {}) as Record<string, unknown>, workspace, controller?.signal)
+        : toolName === WORK_TOOL.name
+        ? await callWorkTool((args ?? {}) as Record<string, unknown>, workspace, workSessionId, controller?.signal)
         : isRemoteTool(toolName)
         ? await callRemoteAgentLinkTool(toolName, args as Record<string, unknown> | undefined, wakeConnection && remoteBinding ? { ...remoteBinding, remoteAgentId: wakeConnection.config.remoteAgentId } : remoteBinding)
         : await callAgentLinkTool(toolName, args as Record<string, unknown> | undefined, workspace, { signal: controller?.signal });
       if (wakeConnection) await wakeConnection.observe(toolName, (args ?? {}) as Record<string, unknown>, result);
+      if(toolName===WORK_TOOL.name && workChannel && (args as Record<string,unknown>|undefined)?.action==='inbox-open' && (args as Record<string,unknown>).mode==='channel') {
+        const input=args as Record<string,unknown>;await workChannel.attach(input.connection as string,input.route as string,result.structuredContent!.token as string);
+      }
       sendResult(request.id, result);
       return;
     }
 
     if (request.method === 'notifications/initialized') {
+      if(workChannel && !workChannelTimer) {
+        workChannelTimer=setInterval(()=>{void workChannel?.poll().catch(error=>process.stderr.write('AgentLink work channel unavailable: '+(error as Error).message.slice(0,160)+'\n'));},2000);
+        void workChannel.poll().catch(()=>{});
+      }
       if (wakeConnection?.config.harness === 'claude-channel' && !wakeTimer) {
         wakeTimer = setInterval(() => { void pollWakeChannel(); }, wakeConnection.config.pollMs);
         void pollWakeChannel();
@@ -199,7 +215,8 @@ function tryReadJsonLine(buffer: Buffer): { body: string; nextOffset: number } |
   return { body, nextOffset: newline + 1 };
 }
 
-export async function serveStdio(options: { sessionScoped?: boolean } = {}): Promise<void> {
+export async function serveStdio(options: { sessionScoped?: boolean; workChannel?:boolean } = {}): Promise<void> {
+  if(options.workChannel)workChannel=new WorkChannel(()=>sessionWorkspace?sessionWorkspace.workspace():process.cwd(),workSessionId,params=>send({jsonrpc:'2.0',method:'notifications/claude/channel',params}));
   if (options.sessionScoped) {
     if (process.env.AGENTLINK_NETWORK_STATE_ROOT || process.env.AGENTLINK_WAKE_CONFIG || process.env.AGENTLINK_PARTICIPANT_ID || process.env.AGENTLINK_WAKE_JOB_ID) throw new Error('User-wide sessions cannot inherit project network or actor bindings');
     sessionWorkspace = new SessionWorkspace();
@@ -222,7 +239,7 @@ export async function serveStdio(options: { sessionScoped?: boolean } = {}): Pro
       }
     }
   }
-  stdin.on('end', () => { if (wakeTimer) clearInterval(wakeTimer); });
+  stdin.on('end', () => { if (wakeTimer) clearInterval(wakeTimer);if(workChannelTimer)clearInterval(workChannelTimer);void workChannel?.close(); });
   let buffer = Buffer.alloc(0);
 
   stdin.on('data', (chunk: Buffer) => {
