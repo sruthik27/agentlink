@@ -1,0 +1,84 @@
+import assert from 'node:assert/strict';
+import { mkdtemp,mkdir,rm,readFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { pathToFileURL,fileURLToPath } from 'node:url';
+import { execFile } from 'node:child_process';
+import { promisify } from 'node:util';
+import { createHash } from 'node:crypto';
+const run=promisify(execFile),base=await mkdtemp(join(tmpdir(),'agentlink-team-installed-'));
+const root=fileURLToPath(new URL('../',import.meta.url));
+const oldHome=process.env.AGENTLINK_CONNECTION_HOME,oldActor=process.env.AGENTLINK_PARTICIPANT_ID;
+let connect,id;
+const repos=[join(base,'a'),join(base,'b')];
+try {
+  const packed=JSON.parse((await run('npm',['pack','--ignore-scripts','--json','--pack-destination',base],{cwd:root,maxBuffer:4*1024*1024})).stdout)[0];
+  for(const path of ['dist/network/work-client.js','dist/network/work-inbox.js','dist/network/work-storage.js','dist/mcp/work-channel.js','docs/team-workflows.md'])assert.ok(packed.files.some(file=>file.path===path),`Missing installed file ${path}`);
+  assert.ok(!packed.files.some(file=>file.path.includes('.hermes') || file.path==='AGENTLINK-NETWORK-HANDOFF.md'));
+  const archive=join(base,packed.filename),archiveSha256=createHash('sha256').update(await readFile(archive)).digest('hex'),prefix=join(base,'install');
+  await run('npm',['install','--prefix',prefix,'--ignore-scripts','--no-audit','--no-fund',archive],{timeout:60000});
+  const installed=join(prefix,'node_modules','@sruthik','agentlink'),module=path=>import(pathToFileURL(join(installed,'dist',path)).href);
+  const {connectAction,runConnectCli}=await module('network/connect.js');connect=connectAction;
+  const {connectionWorkAction}=await module('network/work-client.js');
+  const {exportPublicIdentity}=await module('network/identity.js'),{readConnection}=await module('network/connect.js');
+  await Promise.all(repos.map(path=>mkdir(path)));process.env.AGENTLINK_CONNECTION_HOME=join(base,'private');delete process.env.AGENTLINK_PARTICIPANT_ID;
+  const invitation=await connect(repos[0],{action:'invite',to:'teammate',ip:'127.0.0.1'});id=invitation.id;await connect(repos[1],{action:'accept',code:invitation.code});
+  const pairedRoot=(await readConnection(repos[0],id)).root,pairedIdentity=await exportPublicIdentity(pairedRoot);
+  const cli=join(installed,'dist','cli.js');
+  assert.match((await run(process.execPath,[cli,'work','help'],{cwd:repos[1]})).stdout,/inbox-open/);
+  await run(process.execPath,[cli,'work','policy','grant','--connection',id,'--id','team','--paths','src','--allow','read,edit,test','--checks','unit','--ttl','10m'],{cwd:repos[1],env:process.env});
+  const call=(host,args)=>connectionWorkAction(repos[host],{connection:id,...args},'installed-'+host);
+  const artifact=async(host,name,content)=>(await call(host,{action:'artifact-create',name,content,mediaType:'text/plain'})).artifact;
+  const fixtureCheck=await run(process.execPath,['--input-type=module','-e',"import assert from 'node:assert/strict';assert.equal(Buffer.from('selected dirty change').toString(),'selected dirty change');process.stdout.write('Protocol fixture content check passed\\n')"]);
+  const source=await artifact(0,'changes.patch','selected dirty change'),tests=await artifact(1,'unit.txt',fixtureCheck.stdout),reviewEvidence=await artifact(0,'review.txt','Fixture independent review of exact output');
+  const create=async(workId,kind,refs=[source],deps=[])=>{
+    const work={id:workId,kind,title:workId,goal:'Complete this team workflow',criteria:['Evidence verified'],scope:{paths:['src'],permissions:['read','edit','test'],checks:['unit']},reviewRequired:kind!=='handoff',dependencies:deps,context:{summary:'Selected change and rationale',nextAction:'Inspect and continue',artifacts:refs}};
+    return (await call(0,{action:'create',work,requestId:'create-'+workId})).item;
+  };
+  const get=async(host,workId)=>(await call(host,{action:'get',id:workId,location:host===1?'local':'peer'})).item;
+  let serial=0;
+  const op=async(host,workId,type,extra={})=>{
+    const item=await get(host,workId);
+    return (await call(host,{action:'operate',id:workId,location:host===1?'local':'peer',...(host===1?{policyId:'team'}:{}),operation:{type,requestId:'installed-op-'+(++serial),expectedVersion:item.version,...extra}})).item;
+  };
+  await create('handoff','handoff');
+  const inbox=await call(1,{action:'inbox-open',route:'main',mode:'active-poll',leaseSeconds:60});
+  const delivery=(await call(1,{action:'inbox-next',route:'main',token:inbox.token})).event;assert.equal(delivery.workId,'handoff');
+  await op(1,'handoff','accept');
+  await call(1,{action:'inbox-ack',route:'main',token:inbox.token,eventId:delivery.id,deliveryToken:delivery.token,outcome:'handled',summary:'Accepted ownership'});
+  await connect(repos[0],{action:'stop',connection:id});await new Promise(r=>setTimeout(r,600));
+  let claim=await op(1,'handoff','claim',{leaseSeconds:60});
+  await op(1,'handoff','submit',{leaseToken:claim.claim.token,artifacts:[source],testArtifact:tests,summary:'Completed without sender listener'});
+  assert.equal((await op(1,'handoff','complete',{summary:'Verified'})).state,'done');
+  await runConnectCli(['resume','--connection',id],repos[0],{log:()=>{}});assert.equal((await get(0,'handoff')).state,'done');assert.deepEqual(await exportPublicIdentity(pairedRoot),pairedIdentity);
+  await create('review','review');await op(1,'review','accept');
+  const reviewerEvidence=await artifact(1,'findings.txt','missing boundary test');
+  for(let round=1;round<=2;round++) {
+    const item=await get(1,'review');
+    await op(1,'review','review',{revision:item.outputRevision,digest:item.outputDigest,accepted:false,findings:[{id:'boundary',content:'Repair round '+round,status:'open'}],evidence:reviewerEvidence,leaseToken:null});
+    const repair=await artifact(0,'changes.patch','repair revision '+round);
+    const repairCheck=await run(process.execPath,['--input-type=module','-e',`import assert from 'node:assert/strict';assert.match(${JSON.stringify('repair revision '+round)},/repair revision [12]/);process.stdout.write('Repair fixture check passed\\n')`]);
+    await op(0,'review','revise',{artifacts:[repair],testArtifact:await artifact(0,'unit.txt',repairCheck.stdout),summary:'Repair '+round});
+  }
+  let item=await get(1,'review');await op(1,'review','review',{revision:item.outputRevision,digest:item.outputDigest,accepted:true,findings:[{id:'boundary',content:'Verified boundary fix',status:'resolved'}],evidence:reviewerEvidence,leaseToken:null});
+  assert.equal((await op(1,'review','complete',{summary:'Independent review accepted'})).state,'done');
+  await create('delegate','delegate',[source],['handoff']);await op(1,'delegate','accept');claim=await op(1,'delegate','claim',{leaseSeconds:60});
+  await op(1,'delegate','submit',{leaseToken:claim.claim.token,artifacts:[source],testArtifact:tests,summary:'Dependent task completed'});
+  item=await get(0,'delegate');await op(0,'delegate','review',{revision:item.outputRevision,digest:item.outputDigest,accepted:true,findings:[],evidence:reviewEvidence,leaseToken:null});
+  assert.equal((await op(1,'delegate','complete',{summary:'Independently verified delegation'})).state,'done');
+  await create('investigate','investigation',[]);await op(1,'investigate','accept');
+  await op(0,'investigate','contribute',{id:'observation',kind:'observation',content:'Independent reproduction A',artifacts:[source]});
+  await op(1,'investigate','contribute',{id:'contradiction',kind:'contradiction',content:'Independent reproduction B differs',artifacts:[tests]});
+  await op(0,'investigate','contribute',{id:'experiment',kind:'experiment',content:'Controlled experiment resolves differing inputs',artifacts:[reviewEvidence]});
+  item=await op(1,'investigate','conclude',{content:'The input difference explains both observations',evidenceIds:['observation','contradiction','experiment'],uncertainties:['Physical hosts not tested by this script'],unresolvedIds:[],resolutions:[{contradictionId:'contradiction',experimentId:'experiment',explanation:'Controlled input distinguishes the two results'}]});
+  const approval={revision:item.conclusion.revision,digest:item.conclusion.digest};await op(1,'investigate','approve-conclusion',approval);await op(0,'investigate','approve-conclusion',approval);
+  assert.equal((await op(1,'investigate','complete',{summary:'Joint evidence-bound conclusion'})).state,'done');
+  assert.equal((await call(1,{action:'maintenance'})).replayMetadataRetained,true);
+  assert.equal((await create('handoff','handoff')).state,'done');
+  const build=JSON.parse((await run(process.execPath,[cli,'version','--format','json'],{cwd:repos[1]})).stdout);
+  console.log(JSON.stringify({status:'PASS',archiveSha256,build,checks:{installedDaemon:true,handoffSenderOffline:true,reviewTwoRepairRounds:true,delegationDependencyAndIndependentReview:true,investigationContradictionAndJointConclusion:true,durableInbox:true,reconnectSameIdentity:true,retentionReplayPreserved:true},nativeModelVerified:false,physicalHostsVerified:false}));
+} finally {
+  if(connect && id)for(const repo of repos)await connect(repo,{action:'stop',connection:id}).catch(()=>{});
+  await new Promise(r=>setTimeout(r,600));if(oldHome===undefined)delete process.env.AGENTLINK_CONNECTION_HOME;else process.env.AGENTLINK_CONNECTION_HOME=oldHome;if(oldActor===undefined)delete process.env.AGENTLINK_PARTICIPANT_ID;else process.env.AGENTLINK_PARTICIPANT_ID=oldActor;
+  await rm(base,{recursive:true,force:true});
+}

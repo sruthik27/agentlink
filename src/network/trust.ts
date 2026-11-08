@@ -177,6 +177,18 @@ export async function revokeGrant(root: string, grantIdValue: string, now = new 
   });
 }
 
+/** Local owner administration only. No peer delivery action can extend access. */
+export async function authorizeGrantExpiry(root:string,grantIdValue:string,expectedFingerprint:string,previousExpiry:string,expiresAt:string,now=new Date()):Promise<void> {
+  const grantId=validateNetworkId(grantIdValue,'grantId'),expiry=parseIsoTimestamp(expiresAt,'Grant expiry');
+  if(Date.parse(expiry)<=now.getTime() || Date.parse(expiry)-now.getTime()>MAX_GRANT_TTL_MS)throw new Error('Explicit communication authorization must be finite (maximum 30 days)');
+  await mutate(root,state=>{
+    const grant=state.grants.find(g=>g.grantId===grantId);
+    if(!grant || grant.revokedAt || grant.remoteFingerprint!==expectedFingerprint || !state.peers.some(p=>p.nodeId===grant.remoteNodeId && p.fingerprint===expectedFingerprint)
+      || ![previousExpiry,expiresAt].includes(grant.expiresAt))throw new Error('Communication grant was revoked or its scope changed; renewal refused');
+    grant.expiresAt=expiry;
+  });
+}
+
 export async function listGrantedLocalAgents(
   root: string,
   remoteNodeIdValue: string,

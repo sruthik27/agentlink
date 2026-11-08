@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.4.0 - 2026-10-21
+
+- Add recipient-owned durable handoff, review/repair, delegation and investigation workflows through CLI and global MCP.
+- Add scoped context packages, isolated receiving worktrees with locally registered checks, exact-byte results and retained verification evidence.
+- Add finite collaboration budgets and one durable escalation, locally pinned named peers and capability routing, and terminal/structured activity views.
+- Add durable inbox routes, session claims, restart reconciliation, same-identity reconnect and bounded storage retention.
+- Beta testing release: native idle model wake and physical-host acceptance remain pending; communication never grants repository execution.
+
 ## 0.3.1 - 2026-10-19
 
 - Add user-wide MCP setup and explicit per-session workspace/actor binding without per-repo installation.

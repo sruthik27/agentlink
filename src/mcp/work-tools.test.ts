@@ -1,0 +1,92 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { spawn, execFile } from 'node:child_process';
+import { promisify } from 'node:util';
+import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { createInterface } from 'node:readline';
+const run = promisify(execFile);
+
+test('global MCP exposes recipient-owned work and isolates concurrent session claims; owner CLI grants and revokes policy', async t => {
+  const base=await mkdtemp(join(tmpdir(),'agentlink-work-mcp-')), repos=[join(base,'a'),join(base,'b')];
+  await Promise.all(repos.map(path=>mkdir(path)));
+  const env:NodeJS.ProcessEnv={...process.env,AGENTLINK_CONNECTION_HOME:join(base,'private')};
+  for(const key of ['AGENTLINK_NETWORK_STATE_ROOT','AGENTLINK_WAKE_CONFIG','AGENTLINK_PARTICIPANT_ID']) delete env[key];
+  const clients=[0,1,1].map((_,index)=>{
+    const child=spawn(process.execPath,[fileURLToPath(new URL('./launch.js',import.meta.url)),'--session',...(index===1?['--work-channel']:[])],{cwd:base,env,stdio:['pipe','pipe','pipe']});
+    let next=0; const pending=new Map<number,{resolve:(value:any)=>void;reject:(error:Error)=>void;timer:NodeJS.Timeout}>();
+    const lines=createInterface({input:child.stdout});
+    const notifications:Array<{method:string;params:any}>=[];
+    lines.on('line',line=>{const m=JSON.parse(line),p=pending.get(m.id);if(m.method)notifications.push(m);if(p){clearTimeout(p.timer);pending.delete(m.id);m.error?p.reject(new Error(m.error.message)):p.resolve(m.result)}});
+    const request=(method:string,params:Record<string,unknown>={})=>new Promise<any>((resolve,reject)=>{const id=++next,timer=setTimeout(()=>{pending.delete(id);reject(new Error('MCP timeout'))},20000);pending.set(id,{resolve,reject,timer});child.stdin.write(JSON.stringify({jsonrpc:'2.0',id,method,params})+'\n')});
+    return {child,lines,request,notifications,call:async(name:string,args:Record<string,unknown>)=>(await request('tools/call',{name,arguments:args})).structuredContent};
+  });
+  let id:string|undefined;
+  t.after(async()=>{
+    if(id) for(const client of clients.slice(0,2)) await client.call('agentlink_connect',{action:'stop',connection:id}).catch(()=>{});
+    await new Promise(r=>setTimeout(r,500));
+    for(const client of clients){client.child.stdin.end();client.child.kill();client.lines.close()}
+    await rm(base,{recursive:true,force:true});
+  });
+  for(const [index,client] of clients.entries()){
+    await client.request('initialize',{protocolVersion:'2024-11-05',capabilities:{},clientInfo:{name:'work-test',version:'1'}});
+    const tools=(await client.request('tools/list')).tools;
+    assert.ok(tools.some((tool:{name:string})=>tool.name==='agentlink_work'));
+    await client.call('agentlink_session',{action:'bind',workspace:repos[index===0?0:1]});
+    client.child.stdin.write(JSON.stringify({jsonrpc:'2.0',method:'notifications/initialized'})+'\n');
+  }
+  const invite=await clients[0]!.call('agentlink_connect',{action:'invite',to:'reviewer',ip:'127.0.0.1'}); id=invite.id;
+  await clients[1]!.call('agentlink_connect',{action:'accept',code:invite.code});
+  const work=(index:number,args:Record<string,unknown>)=>clients[index]!.call('agentlink_work',{connection:id,...args});
+  const cli=fileURLToPath(new URL('../cli.js',import.meta.url));
+  await mkdir(join(repos[0]!,'src')); await writeFile(join(repos[0]!,'src','selected.ts'),'export const result = 42;');
+  const grant=(index:number)=>run(process.execPath,[cli,'work','policy','grant','--connection',id!,'--id','team','--paths','src','--allow','read,edit,test','--checks','unit','--ttl','5m'],{cwd:repos[index],env});
+  await grant(0); await grant(1);
+  const ref=(await work(0,{action:'export',path:'src/selected.ts',policyId:'team'})).artifact;
+  await assert.rejects(work(0,{action:'export',path:'outside.txt',policyId:'team'}),/exceeds/);
+  await assert.rejects(work(0,{action:'policy-grant',id:'remote-permit'}),/Unsupported/);
+  const draft={id:'mcp-handoff',kind:'handoff',title:'Continue work',goal:'Finish from this version',criteria:['unit pass'],scope:{paths:['src'],permissions:['read','edit','test'],checks:['unit']},reviewRequired:false,dependencies:[],context:{summary:'Selected source and intent',nextAction:'Inspect and complete',artifacts:[ref]}};
+  const created=await work(0,{action:'create',work:draft,requestId:'mcp-create'});
+  assert.equal(created.item.state,'queued');
+  for(let i=0;i<80 && !clients[1]!.notifications.some(row=>row.method==='notifications/claude/channel');i++)await new Promise(r=>setTimeout(r,100));
+  const channel=clients[1]!.notifications.find(row=>row.method==='notifications/claude/channel');assert.ok(channel,'configured MCP channel must emit the durable work event');
+  const inbox=await work(1,{action:'inbox-open',route:'main',mode:'channel',leaseSeconds:30});
+  const pendingEvent=(await work(1,{action:'inbox-next',route:'main',token:inbox.token})).event;
+  assert.equal(channel.params.meta.event_id,pendingEvent.id);assert.equal(pendingEvent.workId,draft.id);
+  await assert.rejects(work(2,{action:'inbox-open',route:'main',mode:'active-poll',leaseSeconds:30}),/another live/);
+  await assert.rejects(work(0,{action:'inbox-open',route:'unsupported',mode:'channel',leaseSeconds:30}),/local launch/);
+  let item=(await work(1,{action:'get',location:'local',id:draft.id})).item;
+  const op=async(index:number,type:string,extra:Record<string,unknown>={})=>{
+    const result=await work(index,{action:'operate',location:'local',id:draft.id,policyId:'team',operation:{type,requestId:type+'-'+item.version,expectedVersion:item.version,...extra}});
+    item=result.item; return item;
+  };
+  await op(1,'accept');
+  assert.equal((await work(1,{action:'inbox-ack',route:'main',token:inbox.token,eventId:pendingEvent.id,deliveryToken:pendingEvent.token,outcome:'handled',summary:'Recipient accepted ownership'})).settled,true);
+  await op(1,'claim',{leaseSeconds:60});
+  const token=item.claim.token;
+  await assert.rejects(op(2,'progress',{leaseToken:token,summary:'Different live session'}),/Matching live/);
+  await op(1,'progress',{leaseToken:token,summary:'Same session owns work'});
+  await run(process.execPath,[cli,'work','policy','revoke','--connection',id!,'--id','team'],{cwd:repos[1],env});
+  await assert.rejects(op(1,'renew',{leaseToken:token,leaseSeconds:60}),/revoked/);
+  await op(1,'release',{leaseToken:token,summary:'Released safely after local revocation'});
+  await assert.rejects(op(2,'claim',{leaseSeconds:60}),/revoked/);
+  const command={action:'get',location:'local',id:draft.id};
+  const readback=await run(process.execPath,[cli,'work','--connection',id!,'--session','cli-session','--request',JSON.stringify(command)],{cwd:repos[1],env});
+  assert.equal(JSON.parse(readback.stdout).item.progress,'Same session owns work');
+  await assert.rejects(work(0,{action:'get',location:'cache',id:draft.id,sessionId:'steal'}),/Unsupported/);
+  const monitored={...draft,id:'monitor-handoff',context:{...draft.context,recipientRoute:'monitor'}};
+  await work(0,{action:'create',work:monitored,requestId:'monitor-create'});
+  const consumer=await work(1,{action:'inbox-open',route:'monitor',mode:'native-monitor',leaseSeconds:60});
+  const commandArgs=consumer.consumer.nativeMonitorCommand as string[];
+  const monitor=spawn(commandArgs[0]!,commandArgs.slice(1),{cwd:consumer.consumer.nativeMonitorCwd,env:{...env,...consumer.consumer.nativeMonitorEnv},stdio:['ignore','pipe','pipe']});
+  const output:any[]=[],monitorLines=createInterface({input:monitor.stdout});monitorLines.on('line',line=>output.push(JSON.parse(line)));
+  t.after(()=>{monitor.kill('SIGTERM');monitorLines.close();});
+  for(let i=0;i<80 && !output.some(row=>row.status==='incoming');i++)await new Promise(r=>setTimeout(r,100));
+  const incoming=output.find(row=>row.status==='incoming');assert.ok(incoming,'native monitor stdout must carry pending work');assert.equal(incoming.event.workId,monitored.id);
+  const sameSession=(await work(1,{action:'inbox-next',route:'monitor',token:consumer.token})).event;
+  assert.equal(sameSession.token,incoming.event.token);
+  await new Promise(r=>setTimeout(r,1200));assert.equal(output.filter(row=>row.status==='incoming').length,1);
+  await new Promise<void>(resolve=>{monitor.once('exit',()=>resolve());monitor.kill('SIGTERM');});monitorLines.close();
+});

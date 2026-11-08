@@ -3,6 +3,7 @@ import type { Socket } from 'node:net';
 import type { TLSSocket } from 'node:tls';
 import { A2A_PROTOCOL_VERSION, createAgentCard, handleA2AJsonRpc } from './a2a.js';
 import { operateCollaboration, parseCollaborationOperation } from './collaboration.js';
+import { handleWorkProtocol } from './work-protocol.js';
 import { sha256, validateNetworkId } from './types.js';
 import { loadNodeIdentity } from './identity.js';
 import { receiveAuthorizedInboundEvent } from './mailbox.js';
@@ -158,7 +159,7 @@ export async function startNetworkServer(options: NetworkServerOptions): Promise
         return;
       }
 
-      if (request.method !== 'POST' || (request.url !== '/v1/events' && request.url !== '/a2a' && request.url !== '/v1/collaboration')) {
+      if (request.method !== 'POST' || (request.url !== '/v1/events' && request.url !== '/a2a' && request.url !== '/v1/collaboration' && request.url !== '/v1/work')) {
         throw new HttpFailure(404, 'not_found', 'Not found');
       }
       if (!request.headers['content-type']?.toLowerCase().startsWith('application/json')) {
@@ -175,6 +176,14 @@ export async function startNetworkServer(options: NetworkServerOptions): Promise
           return;
         }
         throw new HttpFailure(400, 'invalid_json', 'Request body is not valid JSON');
+      }
+      if (request.url === '/v1/work') {
+        try { respond(response, 200, await handleWorkProtocol(options.stateRoot, peer, identity, parsed)); }
+        catch (error) {
+          const message = (error as Error).message;
+          respond(response, 403, { error: 'work_rejected', message: /^(Work |Only |Unknown |Stale |Invalid |Independent |Matching |Local |Unsupported |Conflicting |Cancellation |Every contradiction |Conclusion |Review |Open findings |Acceptance |Assembled |Pending )/.test(message) ? message : 'Work operation rejected' });
+        }
+        return;
       }
       if (request.url === '/v1/collaboration') {
         try {
